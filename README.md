@@ -62,12 +62,14 @@ can be used on BSON.
 
 These of course can be combined:
     ```
+    -- Use dotpath to quickly get to event substructure, then cast to jsonb and
+    -- use ?@ operator to ask if both `id` and `type` are present as top level tags:
     select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?@ array['id','type'] from table;
     ```
 
 In general, the dotpath functions will be faster and more memory efficient
 especially for larger and/or deeper structures.  This is because the dotpath
-implementation in the C library itself will "visit" the BSON structure and only
+implementation in the C library itself will "walk" the BSON structure and only
 vend allocated material at the terminal of the path.  The arrow operators
 necessitate the construction of a fully inflated substructure at each step in
 the path, just like the native `json` and `jsonb` types.
