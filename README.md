@@ -21,15 +21,19 @@ similar to JSON but offers these advantages:
     same way, each time, every time.
  *  Standard SDK implementations in 13 languages
 
-Roundtripping and many available language SDKs enables the following.
+Roundtripping and many available language SDKs enables seamless creation,
+manipulation, transmission, and querying of data in a distributed system without
+coordinating IDLs, compile-time dependencies, nuances in platform type representation, etc.   Here is an example:
 
   1.  Java program constructs an `org.bson.Document` which honors `java.util.Map` interface.
   2.  Java program encodes `org.bson.Document` using Java SDK to a BSON `byte[]`.
   3.  Java program publishes `byte[]` to a Kafka topic.
   4.  python listener wakes up on topic and receives `byte[]`.
   5.  python listener decodes `byte[]` using python BSON SDK into `dict` -- not a string, a fully reconstituted object with substructures, `datetime.datetime` for date fieldss, etc. --  and prints some things -- but does not change anything in the dict.
-  6.  python listener encodes `dict` to `byte[]` and publishes back to Kafka
-  7.  A different Java program wakes up and receives `byte[]`.
+  6.  python listener encodes `dict` to `byte[]` and saves it to a BSON
+column in Postgres
+  7.  A different Java program wakes up on an insert trigger and `SELECT`s
+  the BSON column as a `byte[]` (e.g. `select bson_column::bytea where ...`)
   8.  This `byte[]` is *identical* to the one created in step 2.
   9.  The different Java program decodes the `byte[]` into an `org.bson.Document`
   10.  The different Java program encodes the `org.bson.Document` into a second `byte[]`
