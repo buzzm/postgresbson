@@ -1,0 +1,6 @@
+# pgbson extension
+comment = 'BSON data type and associated functions'
+default_version = '2.0'
+module_pathname = '$libdir/pgbson'
+relocatable = true
+superuser = false

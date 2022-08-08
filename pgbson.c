@@ -1,0 +1,681 @@
+// Copyright (c) 2022  Buzz Moschetti <buzz.moschetti@gmail.com>
+// 
+// Permission to use, copy, modify, and distribute this software and its documentation for any purpose, without fee, and without a written agreement is hereby granted,
+// provided that the above copyright notice and this paragraph and the following two paragraphs appear in all copies.
+// 
+// IN NO EVENT SHALL THE AUTHOR BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT, SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, INCLUDING LOST PROFITS, 
+// ARISING OUT OF THE USE OF THIS SOFTWARE AND ITS DOCUMENTATION, EVEN IF THE AUTHOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// 
+// THE AUTHOR SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
+// THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND THE AUTHOR HAS NO OBLIGATIONS TO PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+
+#ifdef LOG
+#undef LOG
+#endif
+
+#include <postgres.h>
+
+#include <utils/timestamp.h>
+#include <datatype/timestamp.h>
+
+#include <utils/numeric.h>
+
+#include <lib/stringinfo.h>
+#include <libpq/pqformat.h>
+
+#include <fmgr.h>
+
+#include <stdio.h>
+
+#include "bson.h"
+
+
+
+#define DatumGetBson(X) ((bytea *) PG_DETOAST_DATUM_PACKED(X))
+#define BSON_GETARG(n)  DatumGetBson(PG_GETARG_DATUM(n))
+//#define BSON_GETARG(N)  PG_GETARG_BYTEA_P(N)
+
+//  uint8_t* is "same" as char[] so hush up the compiler
+#define BSON_VARDATA(X)  (uint8_t*)VARDATA(X)
+
+
+
+
+#ifdef PG_MODULE_MAGIC
+PG_MODULE_MAGIC;
+#endif
+
+
+
+
+static text* mk_text(const char* cstr)
+{
+    int s_len = strlen(cstr);
+    int tot_len = s_len + VARHDRSZ;
+
+    text* t = (text *) palloc(tot_len);
+    SET_VARSIZE(t, tot_len);
+
+    memcpy((void *) VARDATA(t), (void *) cstr, s_len);
+
+    return t;
+}
+
+
+static char* mk_cstring(const char* cstr)
+{
+    int s_len = strlen(cstr);
+    int tot_len = s_len + 1;  // just 1 extra NULL...
+
+    char* p = (char*) palloc(tot_len);
+
+    memcpy((void *) p, (void *) cstr, tot_len); // incl NULL!
+
+    return p;
+}
+
+
+static bytea* mk_palloc_bytea(bson_t* b)
+{
+    // b->len seems to be the official way to get at BSON length.
+
+    int tot_size = b->len + VARHDRSZ; // MUST add varlena hdr!
+    
+    bytea* aa = (bytea*) palloc(tot_size);
+    SET_VARSIZE(aa, tot_size);
+
+    /*
+     * VARDATA is a pointer to the data region of the new struct.  The source
+     * could be a short datum, so retrieve its data through VARDATA_ANY.
+     */
+    memcpy((void *) VARDATA(aa), /* destination */
+           (void *) bson_get_data(b), // ooo!
+	   b->len); 
+
+    return aa;
+}
+
+
+
+PG_FUNCTION_INFO_V1(pgbson_version);
+Datum pgbson_version(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_CSTRING(mk_cstring("2.1"));
+}
+
+// This is: take EJSON in, give back bytea* of BSON for storage in DB
+PG_FUNCTION_INFO_V1(bson_in);
+Datum bson_in(PG_FUNCTION_ARGS)
+{
+    // Inbound string is EJSON
+    char* jsons = PG_GETARG_CSTRING(0);
+    int slen = strlen(jsons);
+
+    bson_error_t err; // on stack
+
+    bson_t* b = bson_new_from_json((const uint8_t *)jsons, slen, &err);
+
+    if(b != NULL) {
+	// Must generate a palloc'd copy so postgres can track the
+	// memory!  Important to destroy b afterwards:
+	bytea* aa = mk_palloc_bytea(b);
+
+	bson_destroy(b);
+
+	PG_RETURN_BYTEA_P(aa);
+
+    } else {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_JSON_TEXT), errmsg(err.message))
+	    );
+
+	PG_RETURN_NULL();
+    }
+
+}
+
+// This is: get BSON pointer from DB, emit EJSON out
+// VERY important consumers of this is the CLI and and casting
+// subsystem.
+PG_FUNCTION_INFO_V1(bson_out);
+Datum bson_out(PG_FUNCTION_ARGS)
+{
+    bytea* arg = BSON_GETARG(0);
+
+    uint8_t* data = BSON_VARDATA(arg);
+    uint32 sz = VARSIZE_ANY_EXHDR(arg);
+    
+    bson_t b; // on stack
+    bson_init_static(&b, data, sz);
+
+    size_t blen;
+    //char* jsons = bson_as_json(&b, &blen); // TBD palloc()
+
+    // Use relaxed because it makes date handling in SQL MUCH easier...
+    char* jsons = bson_as_relaxed_extended_json(&b, &blen);
+
+    if(jsons != NULL) {
+	char* pstring = mk_cstring(jsons);  // palloc
+	bson_free(jsons); // per bson.h
+	PG_RETURN_CSTRING(pstring);
+    }
+
+    PG_RETURN_NULL();
+}
+
+
+// This is: take BSON pointer from DB, emit BSON to client
+PG_FUNCTION_INFO_V1(bson_send);
+Datum bson_send(PG_FUNCTION_ARGS)
+{
+    bytea* arg = BSON_GETARG(0);
+
+    uint8_t* data = BSON_VARDATA(arg);
+    uint32 sz = VARSIZE_ANY_EXHDR(arg);
+
+    StringInfoData buf;
+
+    pq_begintypsend(&buf);
+    pq_sendbytes(&buf, (char *) data, sz);
+
+    PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+}
+
+
+// This is: get BSON pointer from outside, save BSON in DB
+PG_FUNCTION_INFO_V1(bson_recv);
+Datum bson_recv(PG_FUNCTION_ARGS)
+{   
+    StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+
+    bson_t b; // on stack
+    bson_init_static(&b, (const uint8_t*) buf, buf->len);
+    
+    bytea* aa = mk_palloc_bytea(&b);
+	
+    PG_RETURN_BYTEA_P(aa);
+}
+
+/**** 
+ operators
+****/
+
+// Logical comparison
+PG_FUNCTION_INFO_V1(pgbson_compare);
+Datum pgbson_compare(PG_FUNCTION_ARGS)
+{
+    bytea* first = BSON_GETARG(0);
+    bytea* second = BSON_GETARG(1);
+
+    bson_t b1; // on stack
+    bson_init_static(&b1, BSON_VARDATA(first), VARSIZE_ANY_EXHDR(first));
+    bson_t b2; // on stack
+    bson_init_static(&b2, BSON_VARDATA(second), VARSIZE_ANY_EXHDR(second));        
+    
+    int cmp = bson_compare(&b1, &b2);
+
+    PG_RETURN_INT32(cmp);
+}
+
+
+//  binary equality
+PG_FUNCTION_INFO_V1(bson_binary_equal);
+Datum bson_binary_equal(PG_FUNCTION_ARGS)
+{
+    bytea* first = BSON_GETARG(0);
+    bytea* second = BSON_GETARG(1);
+
+    bson_t b1; // on stack
+    bson_init_static(&b1, BSON_VARDATA(first), VARSIZE_ANY_EXHDR(first));
+    bson_t b2; // on stack
+    bson_init_static(&b2, BSON_VARDATA(second), VARSIZE_ANY_EXHDR(second));        
+    
+    bool cmp = bson_equal(&b1, &b2);
+
+    PG_RETURN_BOOL(cmp);
+}
+
+// hash index support
+PG_FUNCTION_INFO_V1(bson_hash);
+Datum bson_hash(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+
+    uint8_t* data = BSON_VARDATA(aa);
+    uint32 sz = VARSIZE_ANY_EXHDR(aa);
+
+    int hash = 5381;
+    int c;
+
+    for(uint32 n = 0; n < sz; n++) {
+	c = *data++;
+        hash = ((hash << 5) + hash) + c; /* hash * 33 + c */
+    }
+    
+    PG_RETURN_INT32(hash);
+}
+
+
+// For now, no fancy conversions.  If you want fancy, let the casting machinery
+// do its thing.  The overall API design is to mimic the bson lib itself,
+// where you pull specific types from the object and "that's that."  In
+// general, such explicit calls and behaviors minimizes implicit funny business
+// that can happen when the deep C code starts making assumptions about things,
+// for example numeric precision.
+
+static bool _get_bson_iter(bson_t* b, char* dotpath, bson_iter_t* target, bson_type_t tt)
+{
+    bool rc = false;
+    bson_iter_t iter;
+
+    if (!bson_iter_init (&iter, b)) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON bytes corrupted"))
+	    );
+    } else {
+	// Careful:  target is *already* pointer...
+	rc = bson_iter_find_descendant(&iter, dotpath, target);
+    }
+    if(rc) {
+	bson_type_t ft = bson_iter_type(target);
+	if(ft != tt) {
+	    rc = false;
+	}
+    }
+
+    return rc;
+}
+
+//
+//  The get_<type> family all follow the same logic:
+//  Put bson_t on the stack and init from bytea.  This avoids ALL internal
+//  allocs, essentially "setting the bytea into place" and making the
+//  get_ very high performance.
+//  Call our _get_bson_iter.  All bson_iter things rely on the host bson_t
+//  remaining in scope; furthermore, if the thing is found, the per-type
+//  extractors e.g. bson_iter_utf8() and bson_iter_int32() return material
+//  that should NOT be freed and must also be used while the host bson_t
+//  is in scope.
+//
+
+PG_FUNCTION_INFO_V1(bson_get_string);  // text bson_get_string(bson, dotpath)
+Datum bson_get_string(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+    
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));
+
+    bson_iter_t target;
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_UTF8)) {
+
+	uint32_t len;
+	// bson_iter_utf8() returns a pointer that MUST NOT be
+	// modified or freed; fine, because we have to palloc it into
+	// text anyway....
+	const char* val = bson_iter_utf8(&target, &len);
+
+	// Index machinery does not know about cstring so we have to
+	// use the fancier text* varlena implementation:
+	PG_RETURN_TEXT_P(mk_text(val));
+    }
+
+    PG_RETURN_NULL();
+}
+
+
+static Timestamp _cvt_datetime_to_ts(int64_t millis_since_epoch)
+{
+    Timestamp ts;
+    struct pg_tm tt, *tm = &tt;
+    fsec_t fsec;
+    
+    time_t t_unix = millis_since_epoch/1000; // get seconds..
+    unsigned t_ms = millis_since_epoch%1000; // ... and the millis...
+
+    struct tm unix_tm = *gmtime(&t_unix); // * in front of function...?
+
+    tt.tm_mday = unix_tm.tm_mday;
+    tt.tm_mon  = unix_tm.tm_mon;
+    tt.tm_year = unix_tm.tm_year + 1900;
+	
+    tt.tm_hour = unix_tm.tm_hour;
+    tt.tm_min  = unix_tm.tm_min;
+    tt.tm_sec  = unix_tm.tm_sec;
+
+    fsec = t_ms * 1000; // turn millis to micros
+
+    tm2timestamp(tm, fsec, NULL, &ts);
+
+    return ts;
+}
+
+
+PG_FUNCTION_INFO_V1(bson_get_datetime);
+Datum bson_get_datetime(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
+
+    Timestamp ts;
+
+    bson_iter_t target;
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_DATE_TIME)) {
+	int64_t millis_since_epoch = bson_iter_date_time (&target);
+
+	ts = _cvt_datetime_to_ts(millis_since_epoch);
+	
+	PG_RETURN_TIMESTAMP(ts);
+    }
+
+    PG_RETURN_NULL();    
+}
+
+
+
+// See the OMG below...
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wincompatible-pointer-types"
+
+extern Datum numeric_in(const char*);
+
+PG_FUNCTION_INFO_V1(bson_get_decimal128);
+Datum bson_get_decimal128(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
+
+    bson_iter_t target;
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_DECIMAL128)) {
+	bson_decimal128_t val;
+
+	if(bson_iter_decimal128(&target, &val)) {
+
+	    // Just like datetime/timestamp, the safest way to convert
+	    // is through a string bridge.
+	    //  BSON_DECIMAL128_STRING 43
+	    char strbuf[43];
+	    bson_decimal128_to_string(&val, strbuf);
+	    
+	    // OMG.   Googled this out of nowhere:
+	    // https://www.spinics.net/lists/pgsql/msg185320.html
+	    // This is how a "regular" piece of code can call the PG wrapper
+	    // stuff, I guess mocking up the call semantics.  numeric_in is
+	    // The Official string-to-numeric encoder from the postgres lib.
+	    Numeric nm = DatumGetNumeric(DirectFunctionCall3(numeric_in,
+					 CStringGetDatum(strbuf), 0, -1));
+
+	    PG_RETURN_NUMERIC(nm);
+	}
+    }
+
+    PG_RETURN_NULL();
+}
+#pragma clang diagnostic pop
+
+
+
+
+PG_FUNCTION_INFO_V1(bson_get_bson);  // bson bson_get_bson(bson, dotpath)
+Datum bson_get_bson(PG_FUNCTION_ARGS)
+{
+    //bytea* aa = PG_GETARG_BYTEA_P(0);
+    bytea* aa = BSON_GETARG(0);    
+    char* dotpath = PG_GETARG_CSTRING(1);
+
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
+
+    bson_iter_t target;
+
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_DOCUMENT)) {
+	uint32_t subdoc_len;
+	const uint8_t* subdoc_data;
+	bson_iter_document(&target, &subdoc_len, &subdoc_data);
+
+	bson_t b2; // on stack
+	bson_init_static(&b2, subdoc_data, subdoc_len);
+    
+	bytea* aa = mk_palloc_bytea(&b2);
+	
+	PG_RETURN_BYTEA_P(aa);
+    }
+
+    PG_RETURN_NULL();
+}
+
+
+
+PG_FUNCTION_INFO_V1(bson_get_double);  // double bson_get_double(bson, dotpath)
+Datum bson_get_double(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
+
+    bson_iter_t target;
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_DOUBLE)) {
+	double dbl = bson_iter_double(&target);
+	PG_RETURN_FLOAT8(dbl);
+    }
+
+    PG_RETURN_NULL();
+}
+
+PG_FUNCTION_INFO_V1(bson_get_int32);  // int32 bson_get_int32(bson, dotpath)
+Datum bson_get_int32(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
+
+    bson_iter_t target;
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_INT32)) {
+	int32_t val = bson_iter_int32(&target);
+	PG_RETURN_INT32(val);
+    }
+
+    PG_RETURN_NULL();
+}
+
+PG_FUNCTION_INFO_V1(bson_get_int64);  // long bson_get_int64(bson, dotpath)
+Datum bson_get_int64(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
+
+    bson_iter_t target;
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_INT64)) {
+	int64_t val = bson_iter_int64(&target);
+	PG_RETURN_INT64(val);
+    }
+
+    PG_RETURN_NULL();
+}
+
+PG_FUNCTION_INFO_V1(bson_get_binary);  // long bson_get_int64(bson, dotpath)
+Datum bson_get_binary(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
+
+    bson_iter_t target;
+    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_BINARY)) {
+	bson_subtype_t subtype;
+	uint32_t len;
+	const uint8_t* data;
+    
+	bson_iter_binary (&target, &subtype, &len, &data);
+
+	// What to do with subtype?
+	
+	int tot_size = len + VARHDRSZ; // MUST add varlena hdr!
+    
+	bytea* aa2 = (bytea*) palloc(tot_size);
+	SET_VARSIZE(aa2, tot_size);
+
+	memcpy((void *) VARDATA(aa2), (void *) data, len);
+	
+	PG_RETURN_BYTEA_P(aa2);
+    }
+
+    PG_RETURN_NULL();
+}
+
+
+
+
+extern void
+_bson_iso8601_date_format (int64_t msec_since_epoch, bson_string_t *str);
+
+PG_FUNCTION_INFO_V1(bson_as_text);  // text bson_get(bson, dotpath)
+Datum bson_as_text(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG(0);
+    char* dotpath = PG_GETARG_CSTRING(1);
+    
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));
+
+    bson_iter_t iter;
+    bson_iter_t target;
+
+    const char* txt = 0;
+    char valbuf[64]; // good for numbers and dates
+    bool must_free = false;
+		
+    if (!bson_iter_init (&iter, &b)) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON bytes corrupted"))
+	    );
+    } else {
+	bool rc = bson_iter_find_descendant(&iter, dotpath, &target);
+    
+	if(rc) {
+	    bson_type_t ft = bson_iter_type(&target);
+	    switch(ft) {
+	    case BSON_TYPE_UTF8: {
+		uint32_t len;		
+		txt = bson_iter_utf8(&target, &len); // NO NEED TO free()
+		break;
+	    }
+	    case BSON_TYPE_DOUBLE: {
+		double v = bson_iter_double(&target);
+		sprintf(valbuf, "%lf", v);
+		txt = valbuf;
+		break;		
+	    }
+	    case BSON_TYPE_INT32: {
+		int32_t v = bson_iter_int32(&target);
+		sprintf(valbuf, "%d", v);
+		txt = valbuf;
+		break;		
+	    }
+	    case BSON_TYPE_INT64: {
+		int64_t v = bson_iter_int64(&target);
+		sprintf(valbuf, "%lld", v);
+		txt = valbuf;
+		break;		
+	    }
+	    case BSON_TYPE_DECIMAL128: {
+		bson_decimal128_t val;
+		if(bson_iter_decimal128(&target, &val)) {
+		    bson_decimal128_to_string(&val, valbuf);
+		    txt = valbuf;
+		}
+		break;		
+	    }
+	    case BSON_TYPE_DATE_TIME: {
+		int64_t millis_since_epoch = bson_iter_date_time (&target);
+		bson_string_t* str = bson_string_new (NULL);
+		_bson_iso8601_date_format(millis_since_epoch, str);
+		bson_strncpy (valbuf, str->str, str->len);
+		valbuf[str->len] = '\0';
+		bson_string_free(str, true); // true means "free segment" ?
+		txt = valbuf;
+		break;		
+	    }								
+
+	    case BSON_TYPE_DOCUMENT: 
+	    case BSON_TYPE_ARRAY: {		
+		uint32_t subdoc_len;
+		const uint8_t* subdoc_data;
+
+		if(ft == BSON_TYPE_DOCUMENT) {
+		    bson_iter_document(&target, &subdoc_len, &subdoc_data);
+		} else {
+		    bson_iter_array(&target, &subdoc_len, &subdoc_data);
+		}
+
+		bson_t b; // on stack
+		bson_init_static(&b, subdoc_data, subdoc_len);
+
+		size_t blen;
+		txt = bson_as_relaxed_extended_json(&b, &blen);
+		must_free = true;
+		break;
+	    }
+
+	    case BSON_TYPE_BINARY: {				
+		bson_subtype_t subtype;
+		uint32_t len;
+		const uint8_t* data;
+    
+		// What to do with subtype?  Dunno!
+		bson_iter_binary (&target, &subtype, &len, &data);
+
+		// Output is "\x54252031..."  So 2 bytes for "\x",
+		// then 2 slots to hold hex rep for each byte, plus 1 for NULL:
+		char* tmpp = (char*)bson_malloc (2 + (len*2) + 1);
+
+		tmpp[0] = '\\';
+		tmpp[1] = 'x';
+		int idx = 2;
+		for(int n = 0; n < len; n++) {
+		    sprintf(tmpp+idx, "%02x", (uint8_t)data[n]);
+		    idx += 2;
+		}
+		tmpp[idx] = '\0';
+
+		txt = tmpp; // because txt is const char*
+		must_free = true;
+		break;
+	    }
+
+	    default: {
+		break; // ?
+	    }		
+	    }
+	}
+    }
+
+    if(txt != 0) {
+	text* t = mk_text(txt);
+	if(must_free) {
+	    bson_free((void*)txt);
+	}
+	PG_RETURN_TEXT_P(t);
+    }
+    
+    PG_RETURN_NULL();
+}
