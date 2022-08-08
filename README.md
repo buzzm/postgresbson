@@ -6,14 +6,17 @@ BSON support for PostgreSQL
 Introduction
 ============
 
-This PostgreSQL extension brings BSON data type, together with functions to create, inspect and manipulate BSON objects.
+This PostgreSQL extension realizes the BSON data type, together with functions to create and inspect BSON objects for the purposes of expressive and performant
+querying.
+
 
 BSON (http://bsonspec.org/) is a high-performance, richly-typed data carrier
-similar to JSON but offers these advantages:
+similar to JSON but offers a number of attractive features including:
 
  *  Datetimes, decimal (numeric), and byte[] are first class types.  In pure
-    JSON these must all be represented as a string, requiring conversion and
-    impairing native operations like `>` and `<=`.
+    JSON these must all be represented as a string, requiring conversion,
+    potentially introducing lossiness, and impairing native operations
+    like `>` and `<=`.  Postgres 
  *  Performance.  Moving binary BSON in and out of the database is almost 5x
     faster than using native `jsonb` and over 50x faster than `json`.
  *  Roundtrip ability.  BSON is binary spec, not a string.  There is no whitespace,
@@ -23,21 +26,19 @@ similar to JSON but offers these advantages:
 
 Roundtripping and many available language SDKs enables seamless creation,
 manipulation, transmission, and querying of data in a distributed system without
-coordinating IDLs, compile-time dependencies, nuances in platform type representation, etc.   Here is an example:
+coordinating IDLs, compile-time dependencies, nuances in platform type representation, etc.   Here is an example of a typical processing chain: Java program -> message bus -> python util -> save to database -> other Java program wakes up on
+insert trigger:
 
-  1.  Java program constructs an `org.bson.Document` which honors `java.util.Map` interface.
-  2.  Java program encodes `org.bson.Document` using Java SDK to a BSON `byte[]`.
+  1.  Java program constructs an `org.bson.Document` (which honors `java.util.Map` interface), e.g. `doc.put("name", "Steve")`, `doc.put("balance", new BigDecimal("143.99"))` etc.
+  2.  Java program encodes `org.bson.Document` using Java BSON SDK to a BSON `byte[]`.
   3.  Java program publishes `byte[]` to a Kafka topic.
   4.  python listener wakes up on topic and receives `byte[]`.
-  5.  python listener decodes `byte[]` using python BSON SDK into `dict` -- not a string, a fully reconstituted object with substructures, `datetime.datetime` for date fieldss, etc. --  and prints some things -- but does not change anything in the dict.
-  6.  python listener encodes `dict` to `byte[]` and saves it to a BSON
-column in Postgres
-  7.  A different Java program wakes up on an insert trigger and `SELECT`s
+  5.  python listener decodes `byte[]` using python BSON SDK into `dict`, **not**
+      a string.  It is a fully reconstituted `dict` object with substructures, `datetime.datetime` for date fieldss, `Decimal` for penny-precise fields, etc.  The listener prints some things but does not change anything in the dict.
+  6.  python listener encodes `dict` to back to `byte[]` and `INSERT`s it to a BSON column in Postgres using the `psycopg2` module.
+  7.  A different Java program wakes up on a Postgres insert trigger and `SELECT`s
   the BSON column as a `byte[]` (e.g. `select bson_column::bytea where ...`)
   8.  This `byte[]` is *identical* to the one created in step 2.
-  9.  The different Java program decodes the `byte[]` into an `org.bson.Document`
-  10.  The different Java program encodes the `org.bson.Document` into a second `byte[]`
-  11. The second `byte[]` is *identical* to the `byte[]` in step 8.
  
 
 The extension offers two kinds of accessor suites:
@@ -55,6 +56,22 @@ The extension offers two kinds of accessor suites:
 The BSON type is castable to JSON in so-called EJSON format.  Thus, the wealth
 of functions and operations and even other extensions built around the JSON type
 can be used on BSON.
+    ```
+    select json_array_length(bson_column::json->'d'->'payload'->'vector') from table;
+    ```
+
+These of course can be combined:
+    ```
+    select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?@ array['id','type'] from table;
+    ```
+
+In general, the dotpath functions will be faster and more memory efficient
+especially for larger and/or deeper structures.  This is because the dotpath
+implementation in the C library itself will "visit" the BSON structure and only
+vend allocated material at the terminal of the path.  The arrow operators
+necessitate the construction of a fully inflated substructure at each step in
+the path, just like the native `json` and `jsonb` types.
+
 
 Status
 ======

@@ -34,6 +34,7 @@ CREATE CAST (bson AS bytea) WITHOUT FUNCTION AS IMPLICIT;
 -- It emits data in EJSON format!  Which means...
 -- ALL functions and expressions in Postgres JSON are now available to you.
 CREATE CAST (bson AS json) WITH INOUT;
+CREATE CAST (bson AS jsonb) WITH INOUT;
 
 
 ------------
