@@ -56,11 +56,13 @@ The extension offers two kinds of accessor suites:
 The BSON type is castable to JSON in so-called EJSON format.  Thus, the wealth
 of functions and operations and even other extensions built around the JSON type
 can be used on BSON.
+
     ```
     select json_array_length(bson_column::json->'d'->'payload'->'vector') from table;
     ```
 
 These of course can be combined:
+
     ```
     -- Use dotpath to quickly get to event substructure, then cast to jsonb and
     -- use ?@ operator to ask if both `id` and `type` are present as top level tags:
