@@ -339,8 +339,8 @@ static Timestamp _cvt_datetime_to_ts(int64_t millis_since_epoch)
     struct tm unix_tm = *gmtime(&t_unix); // * in front of function...?
 
     tt.tm_mday = unix_tm.tm_mday;
-    tt.tm_mon  = unix_tm.tm_mon;
-    tt.tm_year = unix_tm.tm_year + 1900;
+    tt.tm_mon  = unix_tm.tm_mon + 1;  // POSIX is 0-11; must add 1 for postgres
+    tt.tm_year = unix_tm.tm_year + 1900; // POSIX is 1900; postgres starts at 1
 	
     tt.tm_hour = unix_tm.tm_hour;
     tt.tm_min  = unix_tm.tm_min;
@@ -435,21 +435,39 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
 
+    bson_iter_t iter;
     bson_iter_t target;
+    uint32_t subdoc_len;
+    const uint8_t* subdoc_data = 0;
 
-    if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_DOCUMENT)) {
-	uint32_t subdoc_len;
-	const uint8_t* subdoc_data;
-	bson_iter_document(&target, &subdoc_len, &subdoc_data);
-
-	bson_t b2; // on stack
-	bson_init_static(&b2, subdoc_data, subdoc_len);
+    bson_iter_init (&iter, &b);
+    bool rc = bson_iter_find_descendant(&iter, dotpath, &target);
+    if(rc) {
+	bson_type_t ft = bson_iter_type(&target);
+	switch(ft) {
+	case BSON_TYPE_DOCUMENT:  {
+	    bson_iter_document(&target, &subdoc_len, &subdoc_data);
+	    break;
+	}
+	case BSON_TYPE_ARRAY:  {
+	    bson_iter_array(&target, &subdoc_len, &subdoc_data);
+	    break;
+	}
+	default: {
+	    // ?  TBD How to "better" handle "object representation" of
+	    // noncomplex types
+	}
+	}
+	if(subdoc_data != 0) {
+	    bson_t b2; // on stack
+	    bson_init_static(&b2, subdoc_data, subdoc_len);
     
-	bytea* aa = mk_palloc_bytea(&b2);
+	    bytea* aa = mk_palloc_bytea(&b2);
 	
-	PG_RETURN_BYTEA_P(aa);
+	    PG_RETURN_BYTEA_P(aa);
+	}
     }
-
+    
     PG_RETURN_NULL();
 }
 

@@ -249,6 +249,8 @@ CREATE FUNCTION bson_get_bson(bson, cstring) RETURNS bson
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
+
+
 -- Forces to-text; used in ->> operator
 CREATE FUNCTION bson_as_text(bson, cstring) RETURNS text
 AS 'MODULE_PATHNAME'

@@ -57,17 +57,13 @@ The BSON type is castable to JSON in so-called EJSON format.  Thus, the wealth
 of functions and operations and even other extensions built around the JSON type
 can be used on BSON.
 
-    ```
     select json_array_length(bson_column::json->'d'->'payload'->'vector') from table;
-    ```
 
 These of course can be combined:
 
-    ```
     -- Use dotpath to quickly get to event substructure, then cast to jsonb and
     -- use ?@ operator to ask if both `id` and `type` are present as top level tags:
     select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?@ array['id','type'] from table;
-    ```
 
 In general, the dotpath functions will be faster and more memory efficient
 especially for larger and/or deeper structures.  This is because the dotpath
@@ -75,6 +71,23 @@ implementation in the C library itself will "walk" the BSON structure and only
 vend allocated material at the terminal of the path.  The arrow operators
 necessitate the construction of a fully inflated substructure at each step in
 the path, just like the native `json` and `jsonb` types.
+
+Arrays, BSON, and JSON
+----------------------
+Unlike JSON, BSON cannot be created from a simple scalar or an array; it must
+be constructed with at least one field:value pair.  This is essentially a given
+when moving real data around at a top level but in the course of descending into
+ substructure, it is possible to encounter an array and have that returned.
+ Since the basic `bson_get_bson` function assumes a set of field:value pairs,
+ the behavior in BSON is to return string indexed object where the field names
+ are the integer representation of the location in the array:
+
+    select bson_column->'d'->'payload'->'vector' ...
+        returns
+    {"0":"some value", "1":"another value", "2":{fldx:"a rich shape"}}
+        not
+    ["some value", "another value", {fldx:"a rich shape"}]
+    
 
 
 Status

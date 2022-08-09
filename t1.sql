@@ -1,13 +1,13 @@
 
-drop table btest;
+drop table bsontest;
 drop extension pgbson CASCADE;
 
 create extension pgbson;
 
-create table btest (
+create table bsontest (
   name text,
-  data BSON,
-  data2 BSON,
+  bdata BSON,
+  bdata2 BSON,
   jbdata jsonb,
   jdata json,
   ts timestamp without time zone,
@@ -15,7 +15,7 @@ create table btest (
   );
 
 
-insert into btest (name,ts,data,amt) values (
+insert into bsontest (name,ts,bdata,amt) values (
        'buzz',
        '2022-05-05T12:13:14.789Z',
        '{"d":{
@@ -36,9 +36,8 @@ insert into btest (name,ts,data,amt) values (
        234534.45
 );
 
--- insert into btest (name,ts,data,amt) values ('dave','2022-05-05T12:13:14.789','{"d":{"recordId":"R2","baz":2}}', 809838.97);
 
 -- Ooooo!
-CREATE INDEX ON btest ( bson_get_string(data, 'd.recordId'));
+CREATE INDEX ON bsontest ( bson_get_string(bdata, 'd.recordId'));
 
 -- mydb=# select (data::json->'d'->'ts'->>'$date')::timestamp from btest;
