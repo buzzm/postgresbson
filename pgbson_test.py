@@ -32,7 +32,8 @@ def safe_bson_decode(bson_bytea):
     return bson.decode(bson_bytea, codec_options=codec_options)
 
 def safe_bson_encode(doc):
-    return bson.BSON.encode(doc) # For symmetry with decode
+#    return bson.BSON.encode(doc) # For symmetry with decode
+    return bson.encode(doc) # For symmetry with decode
 
 
 # python datetime has res to micros but BSON is only to millis.
@@ -132,6 +133,17 @@ def insert():
     conn.commit()
 
 
+def get_doc_from_bson(sql):
+    curs.execute(sql)
+    all_recs = curs.fetchall()
+    if len(all_recs) != 1:
+        err = "did not find 1 record"
+    else:
+        item = all_recs[0][0]  # Get column 1
+        if type(item) is memoryview:
+            item = bytes(item)
+        return safe_bson_decode(item)
+    
 def check1(msg, sql, expected):
     err = ""
     curs.execute(sql)
@@ -143,7 +155,7 @@ def check1(msg, sql, expected):
         if type(item) is memoryview:
             item = bytes(item)
         if expected != item:
-            err = "got [%s]::%s, expected [%s]::%s" % (item,type(item),expected,type(expected))
+            err = "got %s::%s ;;  expected %s::%s" % (item,type(item),expected,type(expected))
 
     if err != "":
         print("%s...FAIL; %s" % (msg,err))
@@ -154,8 +166,8 @@ def check1(msg, sql, expected):
 
 
 
-init()
-insert()
+#init()
+#insert()
 
 check1("basic roundtrip", 'SELECT bdata::bytea FROM bsontest', raw_bson)
 check1("string exists", "SELECT bson_get_string(bdata, 'header.type') FROM bsontest", "X")
@@ -168,7 +180,14 @@ check1("jsonb cast arrow nav", "select (bdata->'data')::jsonb->'userPrefs'->0->'
 
 # TBD:  Have to do something about '0' vs. 0.  At least document it....
 check1("bson arrow nav", "select bdata->'data'->'userPrefs'->'0'->>'type' from bsontest", "DEP")
-    
+
+#check1("bson_get_bson", "select bson_get_bson(bdata,'data.userPrefs.0')::bytea from bsontest", "X")
+
+doc = get_doc_from_bson("select bson_get_bson(bdata,'data.userPrefs.0')::bytea from bsontest")
+print(doc)
+
+#doc = get_doc_from_bson("select (bdata->'data')::bytea from bsontest")
+#print(doc['userPrefs'][1])
 
 sys.exit(0)
 

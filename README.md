@@ -79,15 +79,17 @@ be constructed with at least one field:value pair.  This is essentially a given
 when moving real data around at a top level but in the course of descending into
  substructure, it is possible to encounter an array and have that returned.
  Since the basic `bson_get_bson` function assumes a set of field:value pairs,
- the behavior in BSON is to return string indexed object where the field names
- are the integer representation of the location in the array:
+ the behavior in BSON is to return a string indexed object where the keys
+ are the integer representation of the location in the array.  From the CLI,
+ this will be seen as:
 
     select bson_column->'d'->'payload'->'vector' ...
-        returns
-    {"0":"some value", "1":"another value", "2":{fldx:"a rich shape"}}
-        not
-    ["some value", "another value", {fldx:"a rich shape"}]
+      returns  {"0":"some value", "1":"another value", "2":{fldx:"a rich shape"}}
+      not      ["some value", "another value", {fldx:"a rich shape"}]
     
+The way to avoid this is to instruct psycopg2 and postgres to *not* try to perform
+container type conversion and instead just vend raw bson which you can decode
+yourself:
 
 
 Status
@@ -182,9 +184,16 @@ Building
 ========
 
 Tested on OS X, Postgres 14.4. 
-Requires: pg_config (which comes with postgres) and a C (not C++) compiler.
+Requires:
 
+ *  postgres 14.4 development SDK (mostly for .h files in postgresql/server)
+ *  pg_config (which comes with postgres) and is used as part of the Makefile
+ *  libbson.1.so and BSON C SDK .h files.
+ *  C (not C++) compiler
+
+Then:
     git clone https://github.com/buzzm/postgresbson.git # or unpack downloaded source package
+    # edit the Makefile to point at the BSON includes and dynamic lib
     make PGUSER=postgres
     make PGUSER=postgres install
 
