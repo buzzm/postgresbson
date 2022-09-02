@@ -290,9 +290,11 @@ static bool _get_bson_iter(bson_t* b, char* dotpath, bson_iter_t* target, bson_t
 
 //
 //  The get_<type> family all follow the same logic:
-//  Put bson_t on the stack and init from bytea.  This avoids ALL internal
-//  allocs, essentially "setting the bytea into place" and making the
-//  get_ very high performance.
+//
+//  Put bson_t on the stack and init from bytea.  This avoids 
+//  allocs at the extension level, essentially "setting the bytea into place"
+//  and making the get_ very high performance.
+//
 //  Call our _get_bson_iter.  All bson_iter things rely on the host bson_t
 //  remaining in scope; furthermore, if the thing is found, the per-type
 //  extractors e.g. bson_iter_utf8() and bson_iter_int32() return material
@@ -527,7 +529,7 @@ Datum bson_get_int64(PG_FUNCTION_ARGS)
     PG_RETURN_NULL();
 }
 
-PG_FUNCTION_INFO_V1(bson_get_binary);  // long bson_get_int64(bson, dotpath)
+PG_FUNCTION_INFO_V1(bson_get_binary);
 Datum bson_get_binary(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG(0);

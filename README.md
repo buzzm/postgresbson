@@ -53,7 +53,8 @@ The extension offers two kinds of accessor suites:
     select (bson_column->'msg'->'header'->'event'->>'ts')::timestamp from table;
     ```
     
-The BSON type is castable to JSON in so-called EJSON format.  Thus, the wealth
+The BSON type is castable to JSON in so-called [EJSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/) format to preserve type fidelity.
+Thus, the wealth
 of functions and operations and even other extensions built around the JSON type
 can be used on BSON.
 
@@ -183,19 +184,32 @@ Example
 Building
 ========
 
-Tested on OS X, Postgres 14.4. 
+Tested using Postgres 14.4 on OS X 10.15.7 and RHEL 8.6 
 Requires:
 
- *  postgres 14.4 development SDK (mostly for .h files in postgresql/server)
- *  pg_config (which comes with postgres) and is used as part of the Makefile
- *  libbson.1.so and BSON C SDK .h files.
- *  C (not C++) compiler
+ *  postgres 14.4 development SDK (mostly for .h files in postgresql/server).
+    On OS X you can use `brew`.  On RH 8 it is a little trickier because many
+    repos do not have version 14.x.  Here is a [a good step-by-step install
+    for RH 8](https://www.linuxshelltips.com/install-postgresql-rhel)
+    Note you will need both server and development (e.g. `postgresql14-devel`)
+    packages because you need `.h` files.
+ *  `pg_config` (which comes with postgres) and is used as part of the Makefile.
+    Note that some earlier versions of postgres did not not include the
+    pg_config exec and the pgxs environment.
+ *  libbson.so.1 and BSON C SDK .h files.  You can make these separately and there
+    is plenty of material on this topic.
+ *  C compiler.  No C++ used.
 
 Then:
     git clone https://github.com/buzzm/postgresbson.git # or unpack downloaded source package
     # edit the Makefile to point at the BSON includes and dynamic lib
     make PGUSER=postgres
     make PGUSER=postgres install
+
+There are way too many build dir permissions, install dir permissions, and other
+local oddments to document here, but suffice it to say that postgres and/or root
+privilege is *not* required to compile and link the shared lib *but* installation
+in your particular environment will vary.
 
 
 Quick reference
