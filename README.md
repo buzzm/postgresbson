@@ -200,7 +200,8 @@ Requires:
     is plenty of material on this topic.
  *  C compiler.  No C++ used.
 
-Then:```
+Then:
+```
     git clone https://github.com/buzzm/postgresbson.git # or unpack downloaded source package
     # edit the Makefile to point at the BSON includes and dynamic lib; then:
     make PGUSER=postgres  # compiles pgbson.c to pgbson.so
