@@ -15,22 +15,24 @@
 
 //#include <stdio.h>    // only for fprintf() debugging....
 
-#include <postgres.h>  // always need this; and seems to be always first
+// The Postgres family of #includes
+#include <postgres.h>  // always need this first, and the deps are indented:
+    // includes to support BSON<->timestamp
+    #include <utils/timestamp.h>
+    #include <datatype/timestamp.h>
 
-// includes to support BSON<->timestamp
-#include <utils/timestamp.h>
-#include <datatype/timestamp.h>
+    // includes to support BSON<->numeric
+    #include <utils/numeric.h>
 
-// includes to support BSON<->numeric
-#include <utils/numeric.h>
-
-// includes to support BSON binary send/receive:
-#include <lib/stringinfo.h>
-#include <libpq/pqformat.h>
+    // includes to support BSON binary send/receive:
+    #include <lib/stringinfo.h>  // technically, #included by pgformat but OK
+    #include <libpq/pqformat.h>
 
 #include <fmgr.h> // always need this
 
 
+
+// Others:  Just one...
 #include "bson.h"  // obviously...
 
 
@@ -415,10 +417,9 @@ Datum bson_get_decimal128(PG_FUNCTION_ARGS)
 
 	if(bson_iter_decimal128(&target, &val)) {
 
-	    // Just like datetime/timestamp, the safest way to convert
-	    // is through a string bridge.
-	    //  BSON_DECIMAL128_STRING 43
-	    char strbuf[43];
+	    // Safest way to convert is through a string bridge.
+	    // From bson.h: max length of decimal128 string: BSON_DECIMAL128_STRING 43
+	    char strbuf[43]; // TBD: #include bson-decimal128.h   ?
 	    bson_decimal128_to_string(&val, strbuf);
 	    
 	    // OMG.   Googled this out of nowhere:

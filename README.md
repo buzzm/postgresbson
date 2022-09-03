@@ -226,17 +226,17 @@ Operators and comparison:
 
 Field access (supports dot notation):
 
-*  bson_get_string(bson, cstring) RETURNS text
-*  bson_get_int32(bson, cstring) RETURNS int4
-*  bson_get_int64(bson, cstring) RETURNS int8
-*  bson_get_double(bson, cstring) RETURNS float8
-*  bson_get_decimal(bson, cstring) RETURNS numeric
-*  bson_get_datetime(bson, cstring) RETURNS timestamp without time zone
-*  bson_get_binary(bson, cstring) RETURNS bytea
+*  bson_get_string(bson, text) RETURNS text
+*  bson_get_int32(bson, text) RETURNS int4
+*  bson_get_int64(bson, text) RETURNS int8
+*  bson_get_double(bson, text) RETURNS float8
+*  bson_get_decimal(bson, text) RETURNS numeric
+*  bson_get_datetime(bson, text) RETURNS timestamp without time zone
+*  bson_get_binary(bson, text) RETURNS bytea
 
-*  bson_get_bson(bson, cstring) RETURNS bson
+*  bson_get_bson(bson, text) RETURNS bson
 
-*  bson_as_text(bson, cstring) RETURNS text
+*  bson_as_text(bson, text) RETURNS text
 
 
 See also
