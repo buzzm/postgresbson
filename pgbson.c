@@ -13,31 +13,43 @@
 #undef LOG
 #endif
 
-#include <postgres.h>
+//#include <stdio.h>    // only for fprintf() debugging....
 
+#include <postgres.h>  // always need this; and seems to be always first
+
+// includes to support BSON<->timestamp
 #include <utils/timestamp.h>
 #include <datatype/timestamp.h>
 
+// includes to support BSON<->numeric
 #include <utils/numeric.h>
 
+// includes to support BSON binary send/receive:
 #include <lib/stringinfo.h>
 #include <libpq/pqformat.h>
 
-#include <fmgr.h>
-
-#include <stdio.h>
-
-#include "bson.h"
+#include <fmgr.h> // always need this
 
 
+#include "bson.h"  // obviously...
 
+
+// Our namespace for macros is BSON_ , acknowledging PG_ as the base namespace
 #define DatumGetBson(X) ((bytea *) PG_DETOAST_DATUM_PACKED(X))
-#define BSON_GETARG(n)  DatumGetBson(PG_GETARG_DATUM(n))
-//#define BSON_GETARG(N)  PG_GETARG_BYTEA_P(N)
+#define BSON_GETARG_BSON(n)  DatumGetBson(PG_GETARG_DATUM(n))
+//#define BSON_GETARG_BSON(N)  PG_GETARG_BYTEA_P(N)
 
 //  uint8_t* is "same" as char[] so hush up the compiler
 #define BSON_VARDATA(X)  (uint8_t*)VARDATA(X)
 
+//  To facilitate using either a literal dotpath or one appearing as a
+//  value in a column or the result of a function call, we make the
+//  dotpath a TEXT type because the autocasting of literal to TEXT works
+//  but TEXT to CSTRING does not; you would have to says
+//      select bson_get_string(bson_column, col_with_dotpath::cstring)
+//  This macro makes it easy for us to extract what we want in EITHER
+//  case: a char* will NULL terminator that we can pass to libbson funcs:
+#define BSON_GETARG_DOTPATH(X)  VARDATA_ANY(PG_GETARG_TEXT_PP(X));
 
 
 
@@ -100,7 +112,7 @@ static bytea* mk_palloc_bytea(bson_t* b)
 PG_FUNCTION_INFO_V1(pgbson_version);
 Datum pgbson_version(PG_FUNCTION_ARGS)
 {
-    PG_RETURN_CSTRING(mk_cstring("2.1"));
+    PG_RETURN_TEXT_P(mk_text("2.1"));
 }
 
 // This is: take EJSON in, give back bytea* of BSON for storage in DB
@@ -141,7 +153,7 @@ Datum bson_in(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_out);
 Datum bson_out(PG_FUNCTION_ARGS)
 {
-    bytea* arg = BSON_GETARG(0);
+    bytea* arg = BSON_GETARG_BSON(0);
 
     uint8_t* data = BSON_VARDATA(arg);
     uint32 sz = VARSIZE_ANY_EXHDR(arg);
@@ -150,8 +162,8 @@ Datum bson_out(PG_FUNCTION_ARGS)
     bson_init_static(&b, data, sz);
 
     size_t blen;
-    //char* jsons = bson_as_json(&b, &blen); // TBD palloc()
 
+    //char* jsons = bson_as_json(&b, &blen); // TBD palloc()
     // Use relaxed because it makes date handling in SQL MUCH easier...
     char* jsons = bson_as_relaxed_extended_json(&b, &blen);
 
@@ -169,7 +181,7 @@ Datum bson_out(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_send);
 Datum bson_send(PG_FUNCTION_ARGS)
 {
-    bytea* arg = BSON_GETARG(0);
+    bytea* arg = BSON_GETARG_BSON(0);
 
     uint8_t* data = BSON_VARDATA(arg);
     uint32 sz = VARSIZE_ANY_EXHDR(arg);
@@ -205,8 +217,8 @@ Datum bson_recv(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(pgbson_compare);
 Datum pgbson_compare(PG_FUNCTION_ARGS)
 {
-    bytea* first = BSON_GETARG(0);
-    bytea* second = BSON_GETARG(1);
+    bytea* first = BSON_GETARG_BSON(0);
+    bytea* second = BSON_GETARG_BSON(1);
 
     bson_t b1; // on stack
     bson_init_static(&b1, BSON_VARDATA(first), VARSIZE_ANY_EXHDR(first));
@@ -223,8 +235,8 @@ Datum pgbson_compare(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_binary_equal);
 Datum bson_binary_equal(PG_FUNCTION_ARGS)
 {
-    bytea* first = BSON_GETARG(0);
-    bytea* second = BSON_GETARG(1);
+    bytea* first = BSON_GETARG_BSON(0);
+    bytea* second = BSON_GETARG_BSON(1);
 
     bson_t b1; // on stack
     bson_init_static(&b1, BSON_VARDATA(first), VARSIZE_ANY_EXHDR(first));
@@ -240,7 +252,7 @@ Datum bson_binary_equal(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_hash);
 Datum bson_hash(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
+    bytea* aa = BSON_GETARG_BSON(0);
 
     uint8_t* data = BSON_VARDATA(aa);
     uint32 sz = VARSIZE_ANY_EXHDR(aa);
@@ -305,9 +317,10 @@ static bool _get_bson_iter(bson_t* b, char* dotpath, bson_iter_t* target, bson_t
 PG_FUNCTION_INFO_V1(bson_get_string);  // text bson_get_string(bson, dotpath)
 Datum bson_get_string(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
-    
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
+//    fprintf(stderr, "dotpath: %ld [%s]\n", strlen(dotpath), dotpath);
+
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));
 
@@ -359,8 +372,8 @@ static Timestamp _cvt_datetime_to_ts(int64_t millis_since_epoch)
 PG_FUNCTION_INFO_V1(bson_get_datetime);
 Datum bson_get_datetime(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -390,8 +403,8 @@ extern Datum numeric_in(const char*);
 PG_FUNCTION_INFO_V1(bson_get_decimal128);
 Datum bson_get_decimal128(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -414,7 +427,7 @@ Datum bson_get_decimal128(PG_FUNCTION_ARGS)
 	    // stuff, I guess mocking up the call semantics.  numeric_in is
 	    // The Official string-to-numeric encoder from the postgres lib.
 	    Numeric nm = DatumGetNumeric(DirectFunctionCall3(numeric_in,
-					 CStringGetDatum(strbuf), 0, -1));
+							     CStringGetDatum(strbuf), 0, -1));
 
 	    PG_RETURN_NUMERIC(nm);
 	}
@@ -431,8 +444,8 @@ PG_FUNCTION_INFO_V1(bson_get_bson);  // bson bson_get_bson(bson, dotpath)
 Datum bson_get_bson(PG_FUNCTION_ARGS)
 {
     //bytea* aa = PG_GETARG_BYTEA_P(0);
-    bytea* aa = BSON_GETARG(0);    
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);    
+    char* dotpath = BSON_GETARG_DOTPATH(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -478,8 +491,8 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_get_double);  // double bson_get_double(bson, dotpath)
 Datum bson_get_double(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -496,8 +509,8 @@ Datum bson_get_double(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_get_int32);  // int32 bson_get_int32(bson, dotpath)
 Datum bson_get_int32(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -514,8 +527,8 @@ Datum bson_get_int32(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_get_int64);  // long bson_get_int64(bson, dotpath)
 Datum bson_get_int64(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -532,8 +545,8 @@ Datum bson_get_int64(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_get_binary);
 Datum bson_get_binary(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -570,8 +583,8 @@ _bson_iso8601_date_format (int64_t msec_since_epoch, bson_string_t *str);
 PG_FUNCTION_INFO_V1(bson_as_text);  // text bson_get(bson, dotpath)
 Datum bson_as_text(PG_FUNCTION_ARGS)
 {
-    bytea* aa = BSON_GETARG(0);
-    char* dotpath = PG_GETARG_CSTRING(1);
+    bytea* aa = BSON_GETARG_BSON(0);
+    char* dotpath = BSON_GETARG_DOTPATH(1);
     
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));

@@ -169,7 +169,7 @@ CREATE OPERATOR CLASS bson_btree_ops
 
 
 -- libbson already has bson_version....
-CREATE FUNCTION pgbson_version() RETURNS cstring
+CREATE FUNCTION pgbson_version() RETURNS text
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
@@ -210,31 +210,31 @@ LANGUAGE C STRICT IMMUTABLE;
 --
 ------------------------------
 
-CREATE FUNCTION bson_get_string(bson, cstring) RETURNS text
+CREATE FUNCTION bson_get_string(bson, text) RETURNS text
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
-CREATE FUNCTION bson_get_datetime(bson, cstring) RETURNS timestamp without time zone
+CREATE FUNCTION bson_get_datetime(bson, text) RETURNS timestamp without time zone
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
-CREATE FUNCTION bson_get_decimal128(bson, cstring) RETURNS numeric
+CREATE FUNCTION bson_get_decimal128(bson, text) RETURNS numeric
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
-CREATE FUNCTION bson_get_int32(bson, cstring) RETURNS int4
+CREATE FUNCTION bson_get_int32(bson, text) RETURNS int4
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
-CREATE FUNCTION bson_get_int64(bson, cstring) RETURNS int8
+CREATE FUNCTION bson_get_int64(bson, text) RETURNS int8
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
-CREATE FUNCTION bson_get_double(bson, cstring) RETURNS float8
+CREATE FUNCTION bson_get_double(bson, text) RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
-CREATE FUNCTION bson_get_binary(bson, cstring) RETURNS bytea
+CREATE FUNCTION bson_get_binary(bson, text) RETURNS bytea
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
@@ -245,33 +245,26 @@ LANGUAGE C STRICT IMMUTABLE;
 --
 --   select json_array_length(bson_get_bson(data, 'a.b.c')::json->'vector') from btest;
 --
-CREATE FUNCTION bson_get_bson(bson, cstring) RETURNS bson
+CREATE FUNCTION bson_get_bson(bson, text) RETURNS bson
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
 
 
 -- Forces to-text; used in ->> operator
-CREATE FUNCTION bson_as_text(bson, cstring) RETURNS text
+CREATE FUNCTION bson_as_text(bson, text) RETURNS text
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE;
 
 CREATE OPERATOR -> (
     LEFTARG = bson,
-    RIGHTARG = cstring,
+    RIGHTARG = text,
     FUNCTION = bson_get_bson
 );
 
 CREATE OPERATOR ->> (
     LEFTARG = bson,
-    RIGHTARG = cstring,
+    RIGHTARG = text,
     FUNCTION = bson_as_text
 );
-
-
-
--- Unwinds array field into set of bson objects.
--- CREATE FUNCTION bson_unwind_array(bson, text) RETURNS SETOF bson
--- AS 'MODULE_PATHNAME'
--- LANGUAGE C STRICT IMMUTABLE;
 

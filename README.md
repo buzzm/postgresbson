@@ -200,11 +200,12 @@ Requires:
     is plenty of material on this topic.
  *  C compiler.  No C++ used.
 
-Then:
+Then:```
     git clone https://github.com/buzzm/postgresbson.git # or unpack downloaded source package
-    # edit the Makefile to point at the BSON includes and dynamic lib
-    make PGUSER=postgres
-    make PGUSER=postgres install
+    # edit the Makefile to point at the BSON includes and dynamic lib; then:
+    make PGUSER=postgres  # compiles pgbson.c to pgbson.so
+    make PGUSER=postgres install  # copies .so, .sql, and .control files into target dirs in postgres environment
+```
 
 There are way too many build dir permissions, install dir permissions, and other
 local oddments to document here, but suffice it to say that postgres and/or root
@@ -227,18 +228,15 @@ Field access (supports dot notation):
 *  bson_get_string(bson, cstring) RETURNS text
 *  bson_get_int32(bson, cstring) RETURNS int4
 *  bson_get_int64(bson, cstring) RETURNS int8
-*  bson_get_double(bson, text) RETURNS float8
-*  bson_get_decimal(bson, text) RETURNS numeric
-*  bson_get_datetime(bson, text) RETURNS timestamp without time zone
+*  bson_get_double(bson, cstring) RETURNS float8
+*  bson_get_decimal(bson, cstring) RETURNS numeric
+*  bson_get_datetime(bson, cstring) RETURNS timestamp without time zone
+*  bson_get_binary(bson, cstring) RETURNS bytea
 
-*  bson_get_bson(bson, text) RETURNS bson
+*  bson_get_bson(bson, cstring) RETURNS bson
 
-*  bson_as_text(bson, text) RETURNS text
+*  bson_as_text(bson, cstring) RETURNS text
 
-Array field support:
-
-*  bson_array_size(bson, text) RETURNS int8
-*  bson_unwind_array(bson, text) RETURNS SETOF bson
 
 See also
 ========

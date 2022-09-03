@@ -5,7 +5,7 @@ drop extension pgbson CASCADE;
 create extension pgbson;
 
 create table bsontest (
-  name text,
+  dotpath text,
   bdata BSON,
   bdata2 BSON,
   jbdata jsonb,
@@ -15,8 +15,8 @@ create table bsontest (
   );
 
 
-insert into bsontest (name,ts,bdata,amt) values (
-       'buzz',
+insert into bsontest (dotpath,ts,bdata,amt) values (
+       'd.recordId',
        '2022-05-05T12:13:14.789Z',
        '{"d":{
            "recordId":"R1",
