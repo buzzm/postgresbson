@@ -11,11 +11,12 @@ create table bsontest (
   jbdata jsonb,
   jdata json,
   ts timestamp without time zone,
-  amt numeric(14,2)
+  amt numeric(14,2),
+  arr1 integer[]
   );
 
 
-insert into bsontest (dotpath,ts,bdata,amt) values (
+insert into bsontest (dotpath,ts,bdata,amt,arr1) values (
        'd.recordId',
        '2022-05-05T12:13:14.789Z',
        '{"d":{
@@ -33,7 +34,8 @@ insert into bsontest (dotpath,ts,bdata,amt) values (
 	   }
          }
        }',
-       234534.45
+       234534.45,
+       '{100,3,-5}'
 );
 
 

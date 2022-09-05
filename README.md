@@ -16,7 +16,7 @@ similar to JSON but offers a number of attractive features including:
  *  Datetimes, decimal (numeric), and byte[] are first class types.  In pure
     JSON these must all be represented as a string, requiring conversion,
     potentially introducing lossiness, and impairing native operations
-    like `>` and `<=`.  Postgres 
+    like `>` and `<=`.
  *  Performance.  Moving binary BSON in and out of the database is almost 5x
     faster than using native `jsonb` and over 50x faster than `json`.
  *  Roundtrip ability.  BSON is binary spec, not a string.  There is no whitespace,
@@ -75,22 +75,39 @@ the path, just like the native `json` and `jsonb` types.
 
 Arrays, BSON, and JSON
 ----------------------
-Unlike JSON, BSON cannot be created from a simple scalar or an array; it must
-be constructed with at least one field:value pair.  This is essentially a given
-when moving real data around at a top level but in the course of descending into
- substructure, it is possible to encounter an array and have that returned.
- Since the basic `bson_get_bson` function assumes a set of field:value pairs,
- the behavior in BSON is to return a string indexed object where the keys
- are the integer representation of the location in the array.  From the CLI,
- this will be seen as:
+Unlike JSON, BSON can only be created from a key:value object (which can be
+empty); it cannot be created from a simple scalar or in particular an array.
+In the course of descending into substructure, it is of course possible to
+encounter an array and have that returned.  The C library gets around this
+problem by returning a string indexed object where the keys
+are the integer representation of the location in the array starting at offset
+zero.  From the CLI,
+this will be seen as:
 
-    select bson_column->'d'->'payload'->'vector' ...
+    select bson_column->'d'->'payload'->'vector' from ...
       returns  {"0":"some value", "1":"another value", "2":{fldx:"a rich shape"}}
       not      ["some value", "another value", {fldx:"a rich shape"}]
     
-The way to avoid this is to instruct psycopg2 and postgres to *not* try to perform
-container type conversion and instead just vend raw bson which you can decode
-yourself:
+The postgres array type does not help here because postgres requires a
+homogenous type and BSON allows for heterogenous types.  
+
+There are two ways to deal with this:
+
+  1.  Access items using strings; note the double arrow!
+      `select bson_column->'d'->'payload'->'vector'->>'0' from ...`
+
+  2.  "Back up one level" in the arrow chain and cast to `jsonb`:
+      ```
+      mydb=# select (bson_column->'d'->'payload')::jsonb->'vector' from ...
+       ?column?   
+      --------------
+      [21, 17, 19]
+
+      mydb=# select (bson_column->'d'->'payload')::jsonb->'vector'->>0 from ...
+       ?column?   
+      --------------
+      21
+      ```
 
 
 Status
@@ -184,21 +201,25 @@ Example
 Building
 ========
 
-Tested using Postgres 14.4 on OS X 10.15.7 and RHEL 8.6 
+Tested using Postgres 14.4 on OS X 10.15.7 and RHEL 8.6.  
+
 Requires:
 
- *  postgres 14.4 development SDK (mostly for .h files in postgresql/server).
+ *  postgres 14.4 development SDK (mostly for `.h` files in `.../postgresql/server`).
     On OS X you can use `brew`.  On RH 8 it is a little trickier because many
     repos do not have version 14.x.  Here is a [a good step-by-step install
-    for RH 8](https://www.linuxshelltips.com/install-postgresql-rhel)
+    of 14.4 for RH 8](https://www.linuxshelltips.com/install-postgresql-rhel)
     Note you will need both server and development (e.g. `postgresql14-devel`)
-    packages because you need `.h` files.
+    packages because you need `.h` files.  It is not necessary to do a complete
+    build of postgres.
  *  `pg_config` (which comes with postgres) and is used as part of the Makefile.
     Note that some earlier versions of postgres did not not include the
-    pg_config exec and the pgxs environment.
- *  libbson.so.1 and BSON C SDK .h files.  You can make these separately and there
-    is plenty of material on this topic.
- *  C compiler.  No C++ used.
+    `pg_config` exec and the `pgxs` environment.
+ *  `libbson.so` and BSON C SDK `.h` files.  You can make these separately and
+    there is plenty of material on this topic.
+ *  C compiler.  No C++ used.  The compiler arguments are driven by the
+    environment set up by `pg_config`.
+    
 
 Then:
 ```
@@ -208,10 +229,10 @@ Then:
     make PGUSER=postgres install  # copies .so, .sql, and .control files into target dirs in postgres environment
 ```
 
-There are way too many build dir permissions, install dir permissions, and other
-local oddments to document here, but suffice it to say that postgres and/or root
-privilege is *not* required to compile and link the shared lib *but* installation
-in your particular environment will vary.
+There are too many build directory permissions, install directory permissions,
+and other local oddments to document here, but 
+neither postgres nor root privilege is required to compile and link the shared
+lib but *installation* in your particular environment will vary.
 
 
 Quick reference

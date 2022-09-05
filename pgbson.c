@@ -13,20 +13,22 @@
 #undef LOG
 #endif
 
-//#include <stdio.h>    // only for fprintf() debugging....
+#include <stdio.h>    // only for fprintf() debugging....
 
 // The Postgres family of #includes
 #include <postgres.h>  // always need this first, and the deps are indented:
-    // includes to support BSON<->timestamp
-    #include <utils/timestamp.h>
-    #include <datatype/timestamp.h>
+#include "utils/builtins.h"  // text_to_cstring, extern numeric
 
-    // includes to support BSON<->numeric
-    #include <utils/numeric.h>
+// includes to support BSON<->timestamp
+#include <utils/timestamp.h>
+#include <datatype/timestamp.h>
 
-    // includes to support BSON binary send/receive:
-    #include <lib/stringinfo.h>  // technically, #included by pgformat but OK
-    #include <libpq/pqformat.h>
+// includes to support BSON<->numeric
+#include <utils/numeric.h>
+
+// includes to support BSON binary send/receive:
+#include <lib/stringinfo.h>  // technically, #included by pgformat but OK
+#include <libpq/pqformat.h>
 
 #include <fmgr.h> // always need this
 
@@ -43,15 +45,6 @@
 
 //  uint8_t* is "same" as char[] so hush up the compiler
 #define BSON_VARDATA(X)  (uint8_t*)VARDATA(X)
-
-//  To facilitate using either a literal dotpath or one appearing as a
-//  value in a column or the result of a function call, we make the
-//  dotpath a TEXT type because the autocasting of literal to TEXT works
-//  but TEXT to CSTRING does not; you would have to says
-//      select bson_get_string(bson_column, col_with_dotpath::cstring)
-//  This macro makes it easy for us to extract what we want in EITHER
-//  case: a char* will NULL terminator that we can pass to libbson funcs:
-#define BSON_GETARG_DOTPATH(X)  VARDATA_ANY(PG_GETARG_TEXT_PP(X));
 
 
 
@@ -102,7 +95,7 @@ static bytea* mk_palloc_bytea(bson_t* b)
      * VARDATA is a pointer to the data region of the new struct.  The source
      * could be a short datum, so retrieve its data through VARDATA_ANY.
      */
-    memcpy((void *) VARDATA(aa), /* destination */
+    memcpy((void *) VARDATA_ANY(aa), /* destination */
            (void *) bson_get_data(b), // ooo!
 	   b->len); 
 
@@ -277,8 +270,10 @@ Datum bson_hash(PG_FUNCTION_ARGS)
 // general, such explicit calls and behaviors minimizes implicit funny business
 // that can happen when the deep C code starts making assumptions about things,
 // for example numeric precision.
-
-static bool _get_bson_iter(bson_t* b, char* dotpath, bson_iter_t* target, bson_type_t tt)
+// We further optimize/mem-safe the environment by taking a text* as it would
+// be passed from postgres and converting it to a regular char* here because
+// we then have to pfree().
+static bool _get_bson_iter(bson_t* b, text* dotpath, bson_iter_t* target, bson_type_t tt)
 {
     bool rc = false;
     bson_iter_t iter;
@@ -289,8 +284,10 @@ static bool _get_bson_iter(bson_t* b, char* dotpath, bson_iter_t* target, bson_t
 	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON bytes corrupted"))
 	    );
     } else {
+	char* c_dotpath = text_to_cstring(dotpath);
 	// Careful:  target is *already* pointer...
-	rc = bson_iter_find_descendant(&iter, dotpath, target);
+	rc = bson_iter_find_descendant(&iter, c_dotpath, target);
+	pfree(c_dotpath);
     }
     if(rc) {
 	bson_type_t ft = bson_iter_type(target);
@@ -320,15 +317,13 @@ PG_FUNCTION_INFO_V1(bson_get_string);  // text bson_get_string(bson, dotpath)
 Datum bson_get_string(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
-//    fprintf(stderr, "dotpath: %ld [%s]\n", strlen(dotpath), dotpath);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));
 
     bson_iter_t target;
     if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_UTF8)) {
-
 	uint32_t len;
 	// bson_iter_utf8() returns a pointer that MUST NOT be
 	// modified or freed; fine, because we have to palloc it into
@@ -375,7 +370,7 @@ PG_FUNCTION_INFO_V1(bson_get_datetime);
 Datum bson_get_datetime(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -400,13 +395,12 @@ Datum bson_get_datetime(PG_FUNCTION_ARGS)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wincompatible-pointer-types"
 
-extern Datum numeric_in(const char*);
 
 PG_FUNCTION_INFO_V1(bson_get_decimal128);
 Datum bson_get_decimal128(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -446,7 +440,7 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 {
     //bytea* aa = PG_GETARG_BYTEA_P(0);
     bytea* aa = BSON_GETARG_BSON(0);    
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -456,8 +450,19 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
     uint32_t subdoc_len;
     const uint8_t* subdoc_data = 0;
 
-    bson_iter_init (&iter, &b);
-    bool rc = bson_iter_find_descendant(&iter, dotpath, &target);
+    char* c_dotpath = text_to_cstring(dotpath);    
+
+    if(!bson_iter_init (&iter, &b)) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON bytes corrupted"))
+	    );
+    }
+    
+    bool rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
+
+    pfree(c_dotpath); // dotpath no longer needed
+    
     if(rc) {
 	bson_type_t ft = bson_iter_type(&target);
 	switch(ft) {
@@ -479,7 +484,7 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 	    bson_init_static(&b2, subdoc_data, subdoc_len);
     
 	    bytea* aa = mk_palloc_bytea(&b2);
-	
+	    
 	    PG_RETURN_BYTEA_P(aa);
 	}
     }
@@ -493,7 +498,7 @@ PG_FUNCTION_INFO_V1(bson_get_double);  // double bson_get_double(bson, dotpath)
 Datum bson_get_double(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -511,7 +516,7 @@ PG_FUNCTION_INFO_V1(bson_get_int32);  // int32 bson_get_int32(bson, dotpath)
 Datum bson_get_int32(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -529,7 +534,7 @@ PG_FUNCTION_INFO_V1(bson_get_int64);  // long bson_get_int64(bson, dotpath)
 Datum bson_get_int64(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -547,7 +552,7 @@ PG_FUNCTION_INFO_V1(bson_get_binary);
 Datum bson_get_binary(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));    
@@ -585,7 +590,7 @@ PG_FUNCTION_INFO_V1(bson_as_text);  // text bson_get(bson, dotpath)
 Datum bson_as_text(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
-    char* dotpath = BSON_GETARG_DOTPATH(1);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
     
     bson_t b; // on stack
     bson_init_static(&b, BSON_VARDATA(aa), VARSIZE_ANY_EXHDR(aa));
@@ -603,7 +608,9 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON bytes corrupted"))
 	    );
     } else {
-	bool rc = bson_iter_find_descendant(&iter, dotpath, &target);
+	char* c_dotpath = text_to_cstring(dotpath);    
+	bool rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
+	pfree(c_dotpath); // dotpath no longer needed
     
 	if(rc) {
 	    bson_type_t ft = bson_iter_type(&target);
