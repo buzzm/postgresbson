@@ -9,6 +9,9 @@
 // THE AUTHOR SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.
 // THE SOFTWARE PROVIDED HEREUNDER IS ON AN "AS IS" BASIS, AND THE AUTHOR HAS NO OBLIGATIONS TO PROVIDE MAINTENANCE, SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
 
+// For future ref: 
+// https://stackoverflow.com/questions/59801552/how-to-return-a-jsonb-object-from-a-postgresql-c-extension-function
+
 #ifdef LOG
 #undef LOG
 #endif
@@ -17,7 +20,8 @@
 
 // The Postgres family of #includes
 #include <postgres.h>  // always need this first, and the deps are indented:
-#include "utils/builtins.h"  // text_to_cstring, extern numeric
+#include "utils/builtins.h"  // text_to_cstring, extern numeric_in
+#include "utils/jsonb.h"  // JsonbPair type, funcs
 
 // includes to support BSON<->timestamp
 #include <utils/timestamp.h>
@@ -41,7 +45,6 @@
 // Our namespace for macros is BSON_ , acknowledging PG_ as the base namespace
 #define DatumGetBson(X) ((bytea *) PG_DETOAST_DATUM_PACKED(X))
 #define BSON_GETARG_BSON(n)  DatumGetBson(PG_GETARG_DATUM(n))
-//#define BSON_GETARG_BSON(N)  PG_GETARG_BYTEA_P(N)
 
 //  uint8_t* is "same" as char[] so hush up the compiler
 #define BSON_VARDATA(X)  (uint8_t*)VARDATA(X)
@@ -96,7 +99,7 @@ static bytea* mk_palloc_bytea(bson_t* b)
      * could be a short datum, so retrieve its data through VARDATA_ANY.
      */
     memcpy((void *) VARDATA_ANY(aa), /* destination */
-           (void *) bson_get_data(b), // ooo!
+           (void *) bson_get_data(b), // ooo! an actual function, not b->data
 	   b->len); 
 
     return aa;
@@ -143,7 +146,7 @@ Datum bson_in(PG_FUNCTION_ARGS)
 }
 
 // This is: get BSON pointer from DB, emit EJSON out
-// VERY important consumers of this is the CLI and and casting
+// VERY important consumers of this are the CLI and and casting
 // subsystem.
 PG_FUNCTION_INFO_V1(bson_out);
 Datum bson_out(PG_FUNCTION_ARGS)
@@ -236,7 +239,7 @@ Datum bson_binary_equal(PG_FUNCTION_ARGS)
     bson_t b1; // on stack
     bson_init_static(&b1, BSON_VARDATA(first), VARSIZE_ANY_EXHDR(first));
     bson_t b2; // on stack
-    bson_init_static(&b2, BSON_VARDATA(second), VARSIZE_ANY_EXHDR(second));        
+    bson_init_static(&b2, BSON_VARDATA(second), VARSIZE_ANY_EXHDR(second));
     
     bool cmp = bson_equal(&b1, &b2);
 
@@ -252,7 +255,7 @@ Datum bson_hash(PG_FUNCTION_ARGS)
     uint8_t* data = BSON_VARDATA(aa);
     uint32 sz = VARSIZE_ANY_EXHDR(aa);
 
-    int hash = 5381;
+    int hash = 5381; // ?
     int c;
 
     for(uint32 n = 0; n < sz; n++) {
@@ -310,7 +313,9 @@ static bool _get_bson_iter(bson_t* b, text* dotpath, bson_iter_t* target, bson_t
 //  remaining in scope; furthermore, if the thing is found, the per-type
 //  extractors e.g. bson_iter_utf8() and bson_iter_int32() return material
 //  that should NOT be freed and must also be used while the host bson_t
-//  is in scope.
+//  is in scope.  This is fine -- because returned material has to be
+//  palloc'd anyway and the calling machinery will free() the text* and
+//  bytea* material after the call is complete.
 //
 
 PG_FUNCTION_INFO_V1(bson_get_string);  // text bson_get_string(bson, dotpath)
@@ -391,11 +396,6 @@ Datum bson_get_datetime(PG_FUNCTION_ARGS)
 
 
 
-// See the OMG below...
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wincompatible-pointer-types"
-
-
 PG_FUNCTION_INFO_V1(bson_get_decimal128);
 Datum bson_get_decimal128(PG_FUNCTION_ARGS)
 {
@@ -430,8 +430,6 @@ Datum bson_get_decimal128(PG_FUNCTION_ARGS)
 
     PG_RETURN_NULL();
 }
-#pragma clang diagnostic pop
-
 
 
 
@@ -447,8 +445,6 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 
     bson_iter_t iter;
     bson_iter_t target;
-    uint32_t subdoc_len;
-    const uint8_t* subdoc_data = 0;
 
     char* c_dotpath = text_to_cstring(dotpath);    
 
@@ -464,6 +460,9 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
     pfree(c_dotpath); // dotpath no longer needed
     
     if(rc) {
+	uint32_t subdoc_len;
+	const uint8_t* subdoc_data = 0;
+
 	bson_type_t ft = bson_iter_type(&target);
 	switch(ft) {
 	case BSON_TYPE_DOCUMENT:  {
@@ -572,7 +571,7 @@ Datum bson_get_binary(PG_FUNCTION_ARGS)
 	bytea* aa2 = (bytea*) palloc(tot_size);
 	SET_VARSIZE(aa2, tot_size);
 
-	memcpy((void *) VARDATA(aa2), (void *) data, len);
+	memcpy((void *) VARDATA(aa2), (void *) data, len); // VARDATA_ANY...?
 	
 	PG_RETURN_BYTEA_P(aa2);
     }
@@ -693,6 +692,7 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 		tmpp[1] = 'x';
 		int idx = 2;
 		for(int n = 0; n < len; n++) {
+		    // Love that pointer math....
 		    sprintf(tmpp+idx, "%02x", (uint8_t)data[n]);
 		    idx += 2;
 		}
@@ -719,4 +719,66 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
     }
     
     PG_RETURN_NULL();
+}
+
+/*
+Experimental
+
+The idea here is bson_get_array directly returns a jsonb so you do NOT
+have to "back up" the dotpath to prevent the _to_bson() machinery exposing
+the array as {"0":val1, "1":val2, ...}.  Given path.to.vector exists, then:
+
+Meh:     select (bson_get_bson(bdata, 'path.to')::jsonb)->'vector'->>0 
+
+Better!  select bson_get_array(bson_column, 'path.to.vector')->>0
+
+This also has the benefit of not forcing the to-jsonb conversion of *all*
+the fields in path.to.  If path.to.really_big_thing was a peer field to
+vector, then resources would be wasting in converting it only to ignore it in
+the subsequent arrow operator to get 'vector'.
+
+Note in both cases, the double arrow operator is used as a terminal
+operator to yield a text type.  If you want to treat it as, say, an integer,
+then you must cast it "manually":
+
+Meh:     select ((bson_get_bson(bdata, 'path.to')::jsonb)->'vector'->>0)::int
+
+Better!  select (bson_get_array(bson_column, 'path.to.vector')->>0)::int
+
+PG_FUNCTION_INFO_V1(bson_get_array);
+Datum bson_get_array(PG_FUNCTION_ARGS) {
+  JsonbPair *pair = palloc(sizeof(JsonbPair));
+  pair->key.type = jbvString;
+  pair->key.val.string.len = 3;
+  pair->key.val.string.val = "foo";
+
+  pair->value.type = jbvNumeric;
+  pair->value.val.numeric = DatumGetNumeric(DirectFunctionCall1(int8_numeric, (int64_t)100));
+  
+  JsonbValue *object = palloc(sizeof(JsonbValue));
+  object->type = jbvObject;
+  object->val.object.nPairs = 1;
+  object->val.object.pairs = pair;
+
+  PG_RETURN_POINTER(JsonbValueToJsonb(object));
+}
+ */
+
+PG_FUNCTION_INFO_V1(bson_get_array);
+Datum bson_get_array(PG_FUNCTION_ARGS) {
+
+    // _get_bson_iter_array
+    //  bson_iter_array(&target, &subdoc_len, &subdoc_data);
+    for(int i = 0; i < 3; ) {
+    }
+
+  pair->value.type = jbvNumeric;
+  pair->value.val.numeric = DatumGetNumeric(DirectFunctionCall1(int8_numeric, (int64_t)100));
+  
+  JsonbValue *object = palloc(sizeof(JsonbValue));
+  object->type = jbvObject;
+  object->val.object.nPairs = 1;
+  object->val.object.pairs = pair;
+
+  PG_RETURN_POINTER(JsonbValueToJsonb(object));
 }

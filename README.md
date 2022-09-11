@@ -94,7 +94,9 @@ homogenous type and BSON allows for heterogenous types.
 There are two ways to deal with this:
 
   1.  Access items using strings; note the double arrow!
-      `select bson_column->'d'->'payload'->'vector'->>'0' from ...`
+      ```
+      select bson_column->'d'->'payload'->'vector'->>'0' from ...
+      ```      	     						 
 
   2.  "Back up one level" in the arrow chain and cast to `jsonb`:
       ```
