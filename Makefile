@@ -14,14 +14,14 @@ LOCAL_CFLAGS  = -Wno-format-security
 # From here down is part of pgxs framework and should run anywhere.
 # The variable names are very specific; do not mess with them.
 MODULE_big = pgbson
-EXTENSION = pgbson          # the extersion's name
+EXTENSION = pgbson          # the extension's name
 DATA = pgbson--2.0.sql    # script file to install
 OBJS = pgbson.o
 
 PG_CFLAGS = $(BSON_INCLUDES) $(LOCAL_CFLAGS)
 SHLIB_LINK = $(BSON_SHLIB)
 
-# for posgres build
+# for postgres build
 PG_CONFIG = pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
