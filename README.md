@@ -128,7 +128,7 @@ Example
     --   "ts": {"$date":"2022-03-03T12:13:14.789Z"}
     -- is converted upon parse to a single scalar of type timestamp:
     --   "ts": timestamp
-    INSERT INTO data_collection (amt) values (
+    INSERT INTO data_collection (data) values (
        '{"d":{
            "recordId":"R1",
 	   "notIndexed":"N1",
@@ -242,25 +242,31 @@ Quick reference
 
 The module defines BSON data type with operator families defined for B-TREE and HASH indexes.
 
+Field access (supports dot notation):
+
+*  bson_get_string(bson_column, dotpath) RETURNS text
+*  bson_get_int32(bson_column, dotpath) RETURNS int4
+*  bson_get_int64(bson_column, dotpath) RETURNS int8
+*  bson_get_double(bson_column, dotpath) RETURNS float8
+*  bson_get_decimal(bson_column, dotpath) RETURNS numeric
+*  bson_get_datetime(bson_column, dotpath) RETURNS timestamp without time zone
+*  bson_get_binary(bson_column, dotpath) RETURNS bytea
+
+*  bson_get_bson(bson_column, dotpath) RETURNS bson
+
+*  bson_as_text(bson_column, dotpath) RETURNS text
+
 Operators and comparison:
 
 *  Operators: =, <>, <=, <, >=, >, == (binary equality), <<>> (binary inequality)
 *  bson_hash(bson) RETURNS INT4
 
-Field access (supports dot notation):
 
-*  bson_get_string(bson, text) RETURNS text
-*  bson_get_int32(bson, text) RETURNS int4
-*  bson_get_int64(bson, text) RETURNS int8
-*  bson_get_double(bson, text) RETURNS float8
-*  bson_get_decimal(bson, text) RETURNS numeric
-*  bson_get_datetime(bson, text) RETURNS timestamp without time zone
-*  bson_get_binary(bson, text) RETURNS bytea
 
-*  bson_get_bson(bson, text) RETURNS bson
-
-*  bson_as_text(bson, text) RETURNS text
-
+TO DO
+========
+ 1.  **Significantly** tidy up test driver
+ 2.  Need something better when extracting arrays.
 
 See also
 ========
