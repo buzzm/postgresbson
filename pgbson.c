@@ -764,6 +764,7 @@ Datum bson_get_array(PG_FUNCTION_ARGS) {
 }
  */
 
+/*
 PG_FUNCTION_INFO_V1(bson_get_array);
 Datum bson_get_array(PG_FUNCTION_ARGS) {
 
@@ -782,3 +783,4 @@ Datum bson_get_array(PG_FUNCTION_ARGS) {
 
   PG_RETURN_POINTER(JsonbValueToJsonb(object));
 }
+*/

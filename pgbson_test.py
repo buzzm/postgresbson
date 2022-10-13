@@ -318,8 +318,6 @@ use case; bson "on its own" in and out of postgres is not very interesting.
     arrow_checks()        
     toast_test()
 
-    for n in range(0,10):
-        check1("string exists", "SELECT bson_get_string(bdata, 'header.type') FROM bsontest", "X")    
 
 if __name__ == "__main__":        
     main(sys.argv)

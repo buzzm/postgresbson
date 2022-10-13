@@ -184,8 +184,12 @@ Example
 
 
     -- These are equivalent queries but the dotpath accessors will be
-    -- significantly faster (and more memory efficient) if the path depth > 3
+    -- significantly faster (and much more memory efficient) if the path depth > 3.
+    -- Note of course that the BSON accessor functions can be used in
+    -- a selection set (select), a predicate (where), or essentially anywhere else.
+    
     select bson_get_bson(data, 'd.payload') from btest where bson_get_string(data,'d.recordId') = 'R1';
+
     select data->'d'->'payload' from btest where bson_get_string(data,'d.recordId') = 'R1';
                                                                                               ?column?                                                                                              
     ----------------------------------------------------------------------------------------------------------------------------------------------------------------    ------------------------------------
@@ -267,6 +271,11 @@ TO DO
 ========
  1.  **Significantly** tidy up test driver
  2.  Need something better when extracting arrays.
+ 3.  Need more docs or a more clever solution for when calling `bson_get_{type}`
+     points to a field that exists but the type is wrong.  Currently it just
+     returns null because that is "safest."   
+
+
 
 See also
 ========
