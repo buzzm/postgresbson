@@ -66,12 +66,71 @@ These of course can be combined:
     -- use ?@ operator to ask if both `id` and `type` are present as top level tags:
     select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?@ array['id','type'] from table;
 
-In general, the dotpath functions will be faster and more memory efficient
+In general, the dotpath functions will be much faster and memory efficient
 especially for larger and/or deeper structures.  This is because the dotpath
-implementation in the C library itself will "walk" the BSON structure and only
-vend allocated material at the terminal of the path.  The arrow operators
+implementation in the underlying C library itself will "walk" the BSON structure
+and only vend allocated material at the terminal of the path.  The arrow operators
 necessitate the construction of a fully inflated substructure at each step in
-the path, just like the native `json` and `jsonb` types.
+the path, which is exactly what happens with arrow operators and the native
+`json` and `jsonb` types.  For example, consider this instance with approx. 3K of
+data, from which we want to query where `id` is `AAA`:
+```
+  {
+    header: { event: {id: "E123"} },
+    data: {
+        payload: {
+	    product: {
+	        definition: {
+	            id: "AAA",
+		    ... another 1K of data ...
+	        },
+	        constraints: {
+		    ... another 1K of data ...
+	        },
+	        approvals: {
+		    ... another 1K of data ...
+                }
+	    }
+	}
+    }
+  }
+```
+The dotpath method will make postgres vend the 3K structure to the BSON extension, which will only have to examine roughly 64 bytes of data to dig down to the `id` field to return a string which is then examined for equality to `AAA`:
+```
+select * from table where bson_get_string(bson_column, 'data.payload.product.definition.id') = 'AAA';
+```
+
+With arrow operators, *at each arrow*, almost 3K of data has to be processed:
+```
+   Remember double arrow operator yields text type, which fortunately is easily
+   compared to a literal string; no casting necessary, but the journey there is
+   tough because each single arrow forces construction of a whole new BSON to
+   pass to the next stage.  This happens internal to the engine but still...
+   
+select * from table where
+bson_column->'data'->'payload'->'product'->'definition'->>'id' = 'AAA';
+           ^       ^          ^          ^             ^     ^          
+           |       |          |          |             |     | 
+           +- initial pull of a little more than 3K    |     | 
+                   |          |          |             |     |                 
+                   +- almost 3K reprocessed            |     |
+                              |          |             |     |
+                              +- another 3K reprocessed|     |
+                                         |             |     |
+                                         +- another 3K |     |
+                                                       |     |     
+                                                       +- about 1K here
+                                                             |
+                                                             +- a handful of bytes
+
+Total: about 13K of data in 4 separate vend **and** construct chunks of 3K processed to extract 3 bytes.
+```      
+Again, this is *exactly* the same situation that occurs with native `json` and `jsonb`
+types using the arrow operators; it is *not* particular to BSON.  This is why postgres
+provides the `#>` operator and the corresponding `json_extract_path` and `jsonb_extract_path` functions for these native types.
+
+
+
 
 Arrays, BSON, and JSON
 ----------------------
@@ -271,7 +330,12 @@ TO DO
 ========
  1.  **Significantly** tidy up test driver
  2.  Need something better when extracting arrays.
- 3.  Need more docs or a more clever solution for when calling `bson_get_{type}`
+ 3.  Need something better when bson_get_bson() resolves to a scalar because
+     simple scalars like a string are not BSON.  Currently, it just returns NULL
+     which is "technically correct" but unsatisfying
+ 4.  Need additional safety checks when doing BSON compare and other operations
+     because corrupted BSON has a tendency to segfault the PG process.
+ 5.  Need more docs or a more clever solution for when calling `bson_get_{type}`
      points to a field that exists but the type is wrong.  Currently it just
      returns null because that is "safest."   
 

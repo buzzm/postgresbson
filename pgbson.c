@@ -221,10 +221,10 @@ Datum pgbson_compare(PG_FUNCTION_ARGS)
     bson_t b1; // on stack
     bson_init_static(&b1, BSON_VARDATA(first), VARSIZE_ANY_EXHDR(first));
     bson_t b2; // on stack
-    bson_init_static(&b2, BSON_VARDATA(second), VARSIZE_ANY_EXHDR(second));        
-    
-    int cmp = bson_compare(&b1, &b2);
+    bson_init_static(&b2, BSON_VARDATA(second), VARSIZE_ANY_EXHDR(second));
 
+    int cmp = bson_compare(&b1, &b2);
+    
     PG_RETURN_INT32(cmp);
 }
 

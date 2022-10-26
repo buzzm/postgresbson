@@ -228,17 +228,44 @@ def basic_internal_update():
 
     insert()
 
+    msg = None
+    
     # cool!
     curs.execute("UPDATE bsontest set bdata2 = bdata")
- 
-    (rb1, rb2) = fetch2("SELECT bdata::bytea, bdata2::bytea FROM bsontest")   
 
-    msg = "ok"
-    if rb1 != rb2:
+    # Basic internal matching:
+    rc = fetch1("SELECT bdata2 = bdata FROM bsontest")
+    if rc != True:
         msg = "FAIL; internal update of bdata2 = bdata do not equal"
+
+    # Go for roundtrip:
+    (rb1, rb2) = fetch2("SELECT bdata::bytea, bdata2::bytea FROM bsontest")   
+    if rb1 != rb2:
+        msg = "FAIL; fetch of bdata2 and bdata yields non-equal BSON"
+
+    rb4 = rb1
+    if True:
+        # Mess with rb2 -- BUT in a way that does not corrupt BSON itself.
+        # So go to end and back up 2 bytes to leave the trailing NULL intact:
+        idx = len(rb2) - 2    
+        rb3 = bytearray(rb2)
+        rb3[idx] = 217
+        idx -= 1
+        rb3[idx] = 119
+        rb4 = bytes(rb3)
+
+    curs.execute("UPDATE bsontest set bdata2 = %s", (rb4,))
+
+    rc = fetch1("SELECT bdata2 = bdata FROM bsontest")
+    if rc != False:
+        msg = "FAIL; bdata2 should not equal bdata after deliberate hack"
     
+    if msg is None:
+        msg = "ok"
+        
     print("basic_internal_update...%s" % msg)    
 
+    
     
 def basic_roundtrip():
     """If this does not work, the whole thing is pointless."""
@@ -313,10 +340,11 @@ use case; bson "on its own" in and out of postgres is not very interesting.
 
 
     basic_roundtrip()
+    toast_test()
     basic_internal_update()
     scalar_checks()
     arrow_checks()        
-    toast_test()
+
 
 
 if __name__ == "__main__":        
