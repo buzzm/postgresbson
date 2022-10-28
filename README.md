@@ -183,6 +183,64 @@ Example
     CREATE EXTENSION pgbson;
     CREATE TABLE data_collection ( data BSON );
 
+    -- Programmatic insert of material through postgres SDK e.g. psycopg2
+    -- can use native types directly; this is this high-fidelity sweet spot
+    -- for the BSON extension:
+
+    import bson  
+    import psycopg2
+
+    import datetime
+
+    conn = psycopg2.connect(DSN) # 'host=machine port=5432 dname=foo .... '
+    sdata = {
+        "header": {
+    	"ts": datetime.datetime(2022,5,5,12,13,14,456),
+            "evId":"E23234"
+        },
+        "data": {
+            "id":"ID0",
+            "notIndexed":"N0",        
+
+            # BSON decimal128 adheres more strongly to IEEE spec than native
+            # python Decimal esp. wrt NaN so we must use that.  We are
+            # encoding to BSON later anyway so no extra dependencies here.
+            "amt": bson.decimal128.Decimal128("107.78"),
+
+            "txDate": datetime.datetime(2022,12,31),
+            "userPrefs": [
+            {"type": "DEP", "updated":datetime.datetime(2021,4,4,12,13,14),"u":{
+                "favoriteCar":"Bugatti",
+                "thumbnail": bson.binary.Binary(bytes("Pretend this is a JPEG", 'utf-8'))
+                }},
+            {"type": "X2A", "updated":datetime.datetime(2021,3,3,12,13,14),"u":{
+                "listOfPrimes":[2,3,5,7,11,13,17,19],
+                "atomsInBowlOfSoup": 283572834759209881,
+                "pi": 3.1415926
+                }}
+            ]
+        }
+    }
+
+    # raw_bson is byte[].  BSON is castable to/from bytea type in PG:
+    raw_bson = bson.encode(sdata) 
+    
+    curs = conn.cursor()
+    curs.execute("INSERT INTO bsontest (data) VALUES (%s)",(raw_bson,))
+    conn.commit()
+
+    curs.execute("""
+    SELECT
+      2 * bson_get_decimal128(data, 'data.amt'),
+      4 + bson_get_datetime(data, 'data.txDate')::date
+    from bsontest
+    """)
+    rr = curs.fetchall()[0] # one row
+    print("amt: ", rr[0], type(rr[0]))  # amt:  215.56 <class 'decimal.Decimal'> fetched as relaxed native Decimal type
+    print("txDate: ", rr[1], type(rr[1])) # txDate:  2023-01-04 <class 'datetime.date'>
+
+
+
     -- EJSON is recognized upon insertion. For example, the $date substructure
     --   "ts": {"$date":"2022-03-03T12:13:14.789Z"}
     -- is converted upon parse to a single scalar of type timestamp:
@@ -190,24 +248,21 @@ Example
     INSERT INTO data_collection (data) values (
        '{"d":{
            "recordId":"R1",
-	   "notIndexed":"N1",
+           "notIndexed":"N1",
            "baz":27,
            "bigint":{"$numberLong":"88888888888888888"},
            "dbl":3.1415,
-	   "ts": {"$date":"2022-03-03T12:13:14.789Z"},
-	   "amt": {"$numberDecimal":"77777809838.97"},
-	   "payload": {
-	      "fun":"scootering",
-	      "val":13,
-	      "vector":[21,17,19],
-	      "image" : { "$binary" : { "base64" : "VGhpcyBpcyBhIHRlc3Q=", "subType" : "00" } } 
-	   }
+           "ts": {"$date":"2022-03-03T12:13:14.789Z"},
+           "amt": {"$numberDecimal":"77777809838.97"},
+           "payload": {
+               "fun":"scootering",
+               "val":13,
+               "vector":[21,17,19],
+               "image" : { "$binary" : { "base64" : "VGhpcyBpcyBhIHRlc3Q=", "subType" : "00" } }
+            }
          }
-       }'
-       );
-
-    -- Programmatic insert of material through postgres SDK e.g. psycopg2
-    -- can use native types directly; there is no need to use EJSON.
+    }'
+    );
 
 
     -- Functional indexes work as well, enabling high performance queries
