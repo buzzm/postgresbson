@@ -98,7 +98,7 @@ data, from which we want to query where `id` is `AAA`:
     }
   }
 ```
-The dotpath method will make postgres vend the 3K structure to the BSON extension, which will only have to examine roughly 64 bytes of data to dig down to the `id` field to return a string which is then examined for equality to `AAA`:
+The dotpath method will make postgres pass the 3K structure to the BSON extension (internally of course, not back to the client!), which will only have to examine roughly 64 bytes of data to dig down to the `id` field to return a string which is then examined for equality to `AAA`:
 ```
 select * from table where bson_get_string(bson_column, 'data.payload.product.definition.id') = 'AAA';
 ```
@@ -107,7 +107,7 @@ With arrow operators, *at each arrow*, almost 3K of data has to be processed:
 ```
    Remember double arrow operator yields text type, which fortunately is easily
    compared to a literal string; no casting necessary, but the journey there is
-   tough because each single arrow forces construction of a whole new BSON to
+   tough because each single arrow forces construction of a whole new object to
    pass to the next stage.  This happens internal to the engine but still...
    
 select * from table where
@@ -126,7 +126,7 @@ bson_column->'data'->'payload'->'product'->'definition'->>'id' = 'AAA';
                                                              |
                                                              +- a handful of bytes
 
-Total: about 13K of data in 4 separate vend **and** construct chunks of 3K processed to extract 3 bytes.
+Total: about 13K of data in 4 separate pass **and** construct chunks of 3K processed to extract 3 bytes.
 ```      
 Again, this is *exactly* the same situation that occurs with native `json` and `jsonb`
 types using the arrow operators; it is *not* particular to BSON.  This is why postgres
