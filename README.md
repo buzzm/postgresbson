@@ -66,6 +66,9 @@ These of course can be combined:
     -- use ?@ operator to ask if both `id` and `type` are present as top level tags:
     select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?@ array['id','type'] from table;
 
+
+Why dotpath accessors are better in BSON (*and* native json and jsonb, too)
+---------------------------------------------------------------------------
 In general, the dotpath functions will be much faster and memory efficient
 especially for larger and/or deeper structures.  This is because the dotpath
 implementation in the underlying C library itself will "walk" the BSON structure
