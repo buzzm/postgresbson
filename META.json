@@ -1,41 +1,40 @@
 {
-   "name": "pair",
-   "abstract": "A key/value pair data type",
-   "description": "This library contains a single PostgreSQL extension, a key/value pair data type called “pair”, along with a convenience function for constructing key/value pairs.",
-   "version": "0.1.4",
+   "name": "pgbson2",
+   "abstract": "Create BSON type and functionality similar to json and jsonb",
+    "description": "This library contains a single PostgreSQL extension, a data type called “bson”, along with functions to access fields anywhere in the structure similar to both the arrow and json(b)_extract_path() features in the built-in json and jsonb types.",
+   "version": "2.0.0",
    "maintainer": [
-      "David E. Wheeler <david@justatheory.com>"
+      "Buzz Moschetti <buzz.moschetti@gmail.com>"
    ],
-   "license": "postgresql",
+   "license": "mit",
    "provides": {
-      "pair": {
-         "abstract": "A key/value pair data type",
-         "file": "sql/pair.sql",
-         "docfile": "doc/pair.md",
-         "version": "0.1.0"
+      "pgbson": {
+         "abstract": "The bson data type",
+          "file": "pgbson--2.0.sql",
+         "docfile": "README.md",
+         "version": "2.0.0"
       }
    },
    "resources": {
       "bugtracker": {
-         "web": "https://github.com/theory/kv-pair/issues/"
+         "web": "https://github.com/buzzm/postgresbson-pair/issues/"
       },
       "repository": {
-      "url":  "git://github.com/theory/kv-pair.git",
-      "web":  "https://github.com/theory/kv-pair/",
+      "url":  "git://github.com/buzzm/postgresbson.git",
+      "web":  "https://github.com/buzzm/postgresbson/",
       "type": "git"
       }
    },
-   "generated_by": "David E. Wheeler",
+   "generated_by": "Buzz Moschetti",
    "meta-spec": {
       "version": "1.0.0",
       "url": "https://pgxn.org/meta/spec.txt"
    },
    "tags": [
-      "variadic function",
-      "ordered pair",
-      "pair",
-      "key value",
-      "key value pair",
+      "json",
+      "jsonb",
+      "bson",
+      "complex structures",       
       "data type"
    ]
 }

@@ -22,7 +22,7 @@ similar to JSON but offers a number of attractive features including:
  *  Roundtrip ability.  BSON is binary spec, not a string.  There is no whitespace,
     quoting rules, etc.  BSON that goes into Postgres comes out *exactly* the
     same way, each time, every time.
- *  Standard SDK implementations in 13 languages
+ *  Standard SDK implementations in upwards of 20 languages
 
 Roundtripping and many available language SDKs enables seamless creation,
 manipulation, transmission, and querying of data in a distributed system without
