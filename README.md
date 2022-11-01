@@ -372,6 +372,7 @@ Field access (supports dot notation):
 *  bson_get_decimal(bson_column, dotpath) RETURNS numeric
 *  bson_get_datetime(bson_column, dotpath) RETURNS timestamp without time zone
 *  bson_get_binary(bson_column, dotpath) RETURNS bytea
+*  bson_get_boolean(bson_column, dotpath) RETURNS boolean
 
 *  bson_get_bson(bson_column, dotpath) RETURNS bson
 

@@ -253,6 +253,11 @@ CREATE FUNCTION bson_get_binary(bson, text) RETURNS bytea
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
+CREATE FUNCTION bson_get_boolean(bson, text) RETURNS boolean
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
+
+
 -- A great workhorse function especially for rapidly descending into a complex
 -- BSON structure to yield a subdoc, which can then be cast to JSON for
 -- all kinds of processing in Postgres.  For example, a doc with big subdocs

@@ -1,5 +1,6 @@
 {
-   "name": "pgbson2",
+   "name": "bson",
+
    "abstract": "Create BSON type and functionality similar to json and jsonb",
     "description": "This library contains a single PostgreSQL extension, a data type called “bson”, along with functions to access fields anywhere in the structure similar to both the arrow and json(b)_extract_path() features in the built-in json and jsonb types.",
    "version": "2.0.0",
@@ -8,7 +9,7 @@
    ],
    "license": "mit",
    "provides": {
-      "pgbson": {
+      "bson": {
          "abstract": "The bson data type",
           "file": "pgbson--2.0.sql",
          "docfile": "README.md",
