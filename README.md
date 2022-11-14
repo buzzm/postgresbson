@@ -17,8 +17,9 @@ similar to JSON but offers a number of attractive features including:
     JSON these must all be represented as a string, requiring conversion,
     potentially introducing lossiness, and impairing native operations
     like `>` and `<=`.
- *  Performance.  Moving binary BSON in and out of the database is almost 5x
-    faster than using native `jsonb` and over 50x faster than `json`.
+ *  Performance.  Moving binary BSON in and out of the database under some
+    conditions is almost 10x faster than using native `jsonb` or `json` because
+    it avoids to- and from-string and to-dictionary conversion.
  *  Roundtrip ability.  BSON is binary spec, not a string.  There is no whitespace,
     quoting rules, etc.  BSON that goes into Postgres comes out *exactly* the
     same way, each time, every time.
@@ -177,7 +178,7 @@ There are two ways to deal with this:
 Status
 ======
 
-Not sure.
+Experimental.  All contribs / PRs / comments / issues welcome.
 
 
 Example
