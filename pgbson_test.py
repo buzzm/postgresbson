@@ -139,6 +139,15 @@ def insertBson(pydata):
     conn.commit()
     return rb7
 
+def insert2Bson(pydata,pydata2):
+    rb7 = safe_bson_encode(pydata)
+    rb8 = safe_bson_encode(pydata2)    
+    curs.execute("TRUNCATE TABLE bsontest")
+    curs.execute("INSERT INTO bsontest (bdata,bdata2) VALUES (%s,%s)", (rb7,rb8))
+    conn.commit()
+    return (rb7,rb8)
+
+
 def insertAll(pydata):
     rb7 = safe_bson_encode(pydata)
     jstr = json.dumps(pydata,default=cvt)
@@ -221,6 +230,37 @@ to check that the internals are actually doing something."""
         
     
 
+def binary_checks():
+    msg = "ok"
+
+    def x(p1,p2,expect,desc):
+        result = True
+        insert2Bson(p1,p2)        
+        rc = fetchRow1Col("SELECT pgbson_compare(bdata,bdata2) FROM bsontest")
+        if rc != expect:
+            print("binary_checks...FAIL: pgbson_compare",desc)
+            result = False
+            
+    for tt in [
+            ({'foo':{'bar':[1,2,3]}, 'baz':3.14159},
+             {'foo':{'bar':[1,2,3]}, 'baz':3.14159},
+             0, "returns non-zero for two identical objects")
+
+            ,({'foo':{'bar':[1,2,3]}, 'baz':3.14159},
+             {'foo':{'bar':[1,2]}, 'baz':3.14159},
+             1, "p1 should be > p2")
+
+            ,({'foo':{'bar':[1,2]}, 'baz':3.14159},
+             {'foo':{'bar':[1,2,7]}, 'baz':3.14159},
+             -1, "p1 should be < p2"
+             )                        
+
+    ]:
+        if False == x(tt[0],tt[1],tt[2],tt[3]):
+            break
+
+
+    
 def basic_internal_update():
     insertBson(sdata)
 
@@ -245,9 +285,9 @@ def basic_internal_update():
         # So go to end and back up 2 bytes to leave the trailing NULL intact:
         idx = len(rb2) - 2    
         rb3 = bytearray(rb2)
-        rb3[idx] = 217
+        rb3[idx] = 217  # arbitrary
         idx -= 1
-        rb3[idx] = 119
+        rb3[idx] = 119  # arbitrary
         rb4 = bytes(rb3)
 
     curs.execute("UPDATE bsontest set bdata2 = %s", (rb4,))
@@ -342,7 +382,10 @@ def view_1():
     check1("!scalar recordId via view",
            "SELECT recordId FROM conv1 where ts < '2022-06-06'::date",
            None)    
-    
+
+    # We use checks of actual python expressions (e.g. a_decimal * 2) because
+    # that is the use case we are testing against.  It's not just the number;
+    # it is the path you take in computing it.
     check1("fancy multiplication via view",
            "SELECT amt * 2 FROM conv1 where recordId = 'ID0'",
            a_decimal * 2)
@@ -380,6 +423,8 @@ use case; bson "on its own" in and out of postgres is not very interesting.
     basic_internal_update()
     scalar_checks()
     arrow_checks()
+
+    binary_checks()   
 
     view_1()
 

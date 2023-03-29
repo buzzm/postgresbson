@@ -325,7 +325,7 @@ Example
 Building
 ========
 
-Tested using Postgres 14.4 on OS X 10.15.7 and RHEL 8.6.  
+Tested using Postgres 14.4 on OS X 10.15.7, OS X 13.2 Ventura, and RHEL 8.6.  
 
 Requires:
 
