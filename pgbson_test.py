@@ -4,7 +4,7 @@
 #  1.  Programmatic interaction with postgres is much more specific with
 #      respect to datatypes and that is the main use case, not throwing
 #      SQL at it from the psql CLI.
-#  2.  We can test SHA3 and roundtripping *much easier* from a program.
+#  2.  We can test SHA2 and roundtripping *much easier* from a program.
 #  3.  python heredocs (triple quoted strings) facilitate construction
 #      of big chunks of SQL
 #  4.  We show "safe" codecs here to ensure python does not scramble
@@ -71,6 +71,11 @@ sdata = {
         "notIndexed":"N0",        
 	"amt": makeDecimal128(a_decimal),  # must do this...
         "txDate": a_datetime,
+        "sub1": {
+            "sub2": {
+                "corn":"dog"
+            }
+        },
         "refundDate": datetime.datetime(2022,8,8,12,13,14,456),        
         "userPrefs": [
             {"type": "DEP", "updated":datetime.datetime(2021,4,4,12,13,14),"u":{
@@ -106,6 +111,7 @@ create extension pgbson;
 create table bsontest (
     marker text,
     bdata BSON,
+    bdata_len integer,    
     bdata2 BSON,
     jbdata jsonb,
     jdata json
@@ -135,7 +141,7 @@ def cvt(o):
 def insertBson(pydata):
     rb7 = safe_bson_encode(pydata)
     curs.execute("TRUNCATE TABLE bsontest")
-    curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (rb7,))
+    curs.execute("INSERT INTO bsontest (bdata,bdata_len) VALUES (%s,%s)", (rb7,len(rb7)))
     conn.commit()
     return rb7
 
@@ -259,7 +265,26 @@ def binary_checks():
         if False == x(tt[0],tt[1],tt[2],tt[3]):
             break
 
+    print("binary_checks...%s" % msg)    
 
+
+def bson_test():
+    """Calling bson_get_bson() via SQL will, behind the scenes, *also* invoke the
+    bson_out() function in the extension to render a text type"""
+    insertBson(sdata)
+
+    msg = "ok"
+        
+    item = fetchRow1Col("SELECT bson_get_bson(bdata, 'data') FROM bsontest")
+    if item.__class__.__name__ != 'str':
+        msg = "FAIL; SELECT bson_get_bson(bdata, 'data') did not return JSON equiv"
+    else:
+        item = fetchRow1Col("SELECT (bson_get_bson(bdata, 'data'))::bytea FROM bsontest")
+        if item.__class__.__name__ != 'memoryview':
+            msg = "FAIL; SELECT (bson_get_bson(bdata, 'data'))::bytea did not return memoryview (raw bytes)"
+            
+    print("bson_test...%s" % msg)    
+    
     
 def basic_internal_update():
     insertBson(sdata)
@@ -337,6 +362,7 @@ def scalar_checks():
 
     check1("string exists", "SELECT bson_get_string(bdata, 'header.type') FROM bsontest", "X")
     check1("string !exists", "SELECT bson_get_string(bdata, 'header.NOT_IN_FILM') FROM bsontest", None)
+    check1("nested string exists", "SELECT bson_get_string(bdata, 'data.sub1.sub2.corn') FROM bsontest", "dog")    
     check1("decimal exists", "SELECT bson_get_decimal128(bdata, 'data.amt') FROM bsontest", a_decimal)
     check1("datetime exists", "SELECT bson_get_datetime(bdata, 'data.txDate') FROM bsontest", a_datetime)
 
@@ -416,15 +442,17 @@ use case; bson "on its own" in and out of postgres is not very interesting.
     # Good for hello world AND making sure compacted Datum headers in
     # extension (1 byte of len header vs. 4 bytes) is working...
     basic_roundtrip({'A':'X'}, "smallest BSON")
-
     basic_roundtrip(sdata, "big structure")
     toast_test()
 
+    bson_test()
+
+    
     basic_internal_update()
     scalar_checks()
-    arrow_checks()
-
     binary_checks()   
+
+    arrow_checks()
 
     view_1()
 

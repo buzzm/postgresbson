@@ -325,11 +325,16 @@ Example
 Building
 ========
 
-Tested using Postgres 14.4 on OS X 10.15.7, OS X 13.2 Ventura, and RHEL 8.6.  
+Tested on
+
+ * PG 14.4: OS X 10.15.7, OS X 13.2 Ventura, and RHEL 8.6.
+ * PG 15.5.3: OS X 13.2 Ventura
+ * PG 16.1.3: OS X 13.2 Ventura
+
 
 Requires:
 
- *  postgres 14.4 development SDK (mostly for `.h` files in `.../postgresql/server`).
+ *  postgres development SDK (mostly for `.h` files in `.../postgresql/server`).
     On OS X you can use `brew`.  On RH 8 it is a little trickier because many
     repos do not have version 14.x.  Here is a [a good step-by-step install
     of 14.4 for RH 8](https://www.linuxshelltips.com/install-postgresql-rhel)
@@ -357,6 +362,17 @@ There are too many build directory permissions, install directory permissions,
 and other local oddments to document here, but 
 neither postgres nor root privilege is required to compile and link the shared
 lib but *installation* in your particular environment will vary.
+
+Make sure you install *and* restart your postgres server to properly pick up
+the new BSON extension.
+
+
+Testing
+========
+
+```python3 pgbson_test.py```
+
+See excuse at top of file regarding the non-standard test driver approach.
 
 
 Quick reference

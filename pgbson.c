@@ -38,8 +38,10 @@
 
 
 
-// Others:  Just one...
+// Others:  
 #include "bson.h"  // obviously...
+
+#include "sha3.h"
 
 
 
@@ -159,10 +161,10 @@ Datum bson_in(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_out);
 Datum bson_out(PG_FUNCTION_ARGS)
 {
-    bytea* arg = BSON_GETARG_BSON(0);
+    bytea* aa = BSON_GETARG_BSON(0);
 
     bson_t b; // on stack
-    BSON_STATIC_INIT(&b, arg);
+    BSON_STATIC_INIT(&b, aa);
 
     
     //char* jsons = bson_as_json(&b, &blen); 
@@ -170,7 +172,8 @@ Datum bson_out(PG_FUNCTION_ARGS)
     size_t blen;
     char* jsons = bson_as_relaxed_extended_json(&b, &blen);
 
-    PG_FREE_IF_COPY(arg,0); // no need for ptr into &b anymore
+    PG_FREE_IF_COPY(aa,0); // no need for ptr into &b anymore; char* jsons is
+			   // alloc'd and stands on its own...
     
     if(jsons != NULL) {
 	char* pstring = mk_cstring(jsons);  // palloc
@@ -476,14 +479,14 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
     bson_iter_t iter;
     bson_iter_t target;
 
-    char* c_dotpath = text_to_cstring(dotpath);    
-
     if(!bson_iter_init (&iter, &b)) {
 	ereport(
 	    ERROR,
 	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON bytes corrupted in bson_get_bson"))
 	    );
     }
+
+    char* c_dotpath = text_to_cstring(dotpath);
     
     bool rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
 
@@ -511,12 +514,12 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 	if(subdoc_data != 0) {
 	    bson_t b2; // on stack
 	    bson_init_static(&b2, subdoc_data, subdoc_len);
-    
-	    bytea* aa = mk_palloc_bytea(&b2);
 
-	    PG_FREE_IF_COPY(aa,0);
+	    bytea* bbb = mk_palloc_bytea(&b2); // alloc a *new* bytea to hold b2
+
+	    PG_FREE_IF_COPY(aa,0); // free the original if necessary...
     
-	    PG_RETURN_BYTEA_P(aa);
+	    PG_RETURN_BYTEA_P(bbb); // return newly alloced material
 	}
     }
     
