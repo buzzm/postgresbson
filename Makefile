@@ -22,7 +22,6 @@ PG_CFLAGS = $(BSON_INCLUDES) $(LOCAL_CFLAGS)
 SHLIB_LINK = $(BSON_SHLIB)
 
 # for postgres build
-PG_CONFIG = pg_config
+PG_CONFIG ?= pg_config
 PGXS := $(shell $(PG_CONFIG) --pgxs)
 include $(PGXS)
-
