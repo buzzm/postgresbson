@@ -328,8 +328,8 @@ Building
 Tested on
 
  * PG 14.4: OS X 10.15.7, OS X 13.2 Ventura, and RHEL 8.6.
- * PG 15.5.3: OS X 13.2 Ventura
- * PG 16.1.3: OS X 13.2 Ventura
+ * PG 15.5.3: OS X 13.2 Ventura, RHEL 9.3
+ * PG 16.1.3: OS X 13.2 Ventura, RHEL 9.3
 
 
 Requires:
@@ -361,7 +361,11 @@ Then:
 There are too many build directory permissions, install directory permissions,
 and other local oddments to document here, but 
 neither postgres nor root privilege is required to compile and link the shared
-lib but *installation* in your particular environment will vary.
+lib but *installation* in your particular environment will vary.  In general,
+on OS X using `brew` you won't need root because root does not own `/opt/homebrew`
+but on Linux, lots of things are done with `sudo yum` and resources end up
+owned as root in `/usr/pgsql-nn` and `/usr/lib64`.
+
 
 Make sure you install *and* restart your postgres server to properly pick up
 the new BSON extension.
@@ -370,7 +374,13 @@ the new BSON extension.
 Testing
 ========
 
-```python3 pgbson_test.py```
+```
+# Make sure postgres-devel is installed *first*; psycopg2 install uses it:
+pip3 install psycopg2  
+pip3 install pymongo   # for bson only; we won't be using the mongo driver
+
+python3 pgbson_test.py
+```
 
 See excuse at top of file regarding the non-standard test driver approach.
 
