@@ -344,15 +344,17 @@ Requires:
  *  `pg_config` (which comes with postgres) and is used as part of the Makefile.
     Note that some earlier versions of postgres did not not include the
     `pg_config` exec and the `pgxs` environment.
- *  `libbson.so` and BSON C SDK `.h` files.  You can make these separately and
-    there is plenty of material on this topic.
+ *  `libbson.so` and BSON C SDK `.h` files.  You can make or install these
+    separately and there is plenty of material on this topic.  There are some
+    quick tips at the top of the `Makefile`
  *  C compiler.  No C++ used.  The compiler arguments are driven by the
     environment set up by `pg_config`.
-    
+
+
 
 Then:
 ```
-    git clone https://github.com/buzzm/postgresbson.git # or unpack downloaded source package
+    git clone https://github.com/buzzm/postgresbson.git
     # edit the Makefile to point at the BSON includes and dynamic lib; then:
     make PGUSER=postgres  # compiles pgbson.c to pgbson.so
     make PGUSER=postgres install  # copies .so, .sql, and .control files into target dirs in postgres environment
@@ -366,17 +368,30 @@ on OS X using `brew` you won't need root because root does not own `/opt/homebre
 but on Linux, lots of things are done with `sudo yum` and resources end up
 owned as root in `/usr/pgsql-nn` and `/usr/lib64`.
 
+In addition, on RHEL 9, there appears to be an oddment around the compilation
+target in make trying to create a `.bc` LLVM file using `clang` in addition to
+the regular `.so` shlib using `gcc`.  On many platforms, `clang` may not be
+installed and even if it is, the `pg_config` modified `Makefile` may use the
+wrong path to it e.g. `/usr/lib64/ccache/clang` instead of `/usr/bin/clang` or
+just `clang`.  The good news it appears the `.bc` LLVM output is *not* necessary
+for the postgres extension.  As long as the `.so` is installed into the proper
+path the extension will work.  At your discretion you can "manually make" the
+`.bc` file by editing the command line and then running `make PGUSER=postgres install` again.
 
-Make sure you install *and* restart your postgres server to properly pick up
-the new BSON extension.
+
+
+Make sure you install *and then restart* your postgres server to properly
+pick up the new BSON extension.
 
 
 Testing
 ========
 
 ```
-# Make sure postgres-devel is installed *first*; psycopg2 install uses it:
-pip3 install psycopg2  
+# Make sure postgresql16-devel (or 14 or 15) is installed *first*. 
+# pip3 install psycopg2 uses pg_config; thus the PATH must also be set!
+PATH=/path/to/pgsql-16/bin/pg_config:$PATH pip3 install psycopg2  
+
 pip3 install pymongo   # for bson only; we won't be using the mongo driver
 
 python3 pgbson_test.py
