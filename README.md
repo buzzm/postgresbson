@@ -41,6 +41,54 @@ insert trigger:
   the BSON column as a `byte[]` (e.g. `select bson_column::bytea where ...`)
   8.  This `byte[]` is *identical* to the one created in step 2.
  
+Another example of roundtrip ability involves hashes and digital signatures. BSON
+offers an easy, robust, and precise means to associate arbitrarily complex data
+with hashes thereof in a way that is basically not possible or certainly not
+*reliable* using JSON or JSONB:
+```
+    #  Create complex data.  Note array g is polymorphic:
+    amt = bson.decimal128.Decimal128(Decimal("-10267.01"))
+    data = {"dt":datetime.datetime.utcnow(),"amt":amt,"msg":"Hello!","g":["2",2,2.0,{'v':2}]}
+
+    # Probably in a util function, take data and associate it with metadata.
+    # Get the SHA2 of this data:
+    raw = bson.encode(data)
+    h2 = hashlib.sha256(raw).hexdigest()
+    meta = {'security':{'hash':{'algo':'SHA256','v':h2}}}
+    doc = {'d': data,'m': meta}
+
+    # Encode the *whole* doc (data + meta) and insert into BSON column:
+    rb2 = bson.encode(doc)
+    curs.execute('insert into foo (bson_data) values (%s);', (rb2,))
+    conn.commit()
+
+    #  -- L A T E R --
+    
+    # Pull the material back out of the database.  Be sure to cast to
+    # bytea so the psycopg2 does not try to turn it into an EJSON string!
+    curs.execute("select bson_data::bytea from foo;")
+    all_recs = curs.fetchall()
+
+    # bytea comes in as type 'memoryview' for efficiency; get the bytes
+    # from row 0, column 0:
+    r = bytes(all_recs[0][0]) 
+
+    doc2 = bson.decode(r, codec_options=CodecOptions(document_class=collections.OrderedDict))
+
+
+    # Extract the stored hash value:
+    h3 = doc2['m']['security']['hash']['v']
+
+    # REHASH the data portion:
+    r2 = bson.encode(doc2['d'])
+    h4 = hashlib.sha256(r2).hexdigest()
+
+    if h3 == h4:
+        print("rehash of data OK")
+    else:
+        print("WARN: rehash of data does not match associated hash")
+```
+
 
 The extension offers two kinds of accessor suites:
 
