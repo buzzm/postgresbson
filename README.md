@@ -274,7 +274,27 @@ Example
         }
     }
 
-    # raw_bson is byte[].  BSON is castable to/from bytea type in PG:
+    # raw_bson is byte[].  BSON is castable to/from bytea type in PG.
+    # See pgbson--2.0.sql about byte[] validation to ensure that the bytea
+    # being stored is real BSON not malformed junk.  Note that null handling is
+    # the same as for regular types and the to/from JSON and validation machinery
+    # is NOT invoked.  In other words:
+    #
+    #   mydb=# insert into bsontest (bdata,marker) values (null,'hello!');
+    #   INSERT 0 1
+    #   mydb=# select bdata,marker from bsontest where bdata is null;
+    #    bdata | marker 
+    #   -------+--------
+    #          | hello!
+    #   (1 row)
+    #   mydb=# select bdata->'d'->'payload',marker from bsontest where bdata is null;
+    #   OR mydb=# select bdata::bytea,marker from bsontest where bdata is null;
+    #   OR mydb=# select bdata::json,marker from bsontest where bdata is null;
+    #    ?column? | marker 
+    #   ----------+--------
+    #             | hello!
+    #   Following a path from a NULL BSON still produces NULL.
+
     raw_bson = bson.encode(sdata) 
     
     curs = conn.cursor()

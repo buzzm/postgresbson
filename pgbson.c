@@ -16,7 +16,12 @@
 #undef LOG
 #endif
 
-//#include <stdio.h>    // only for fprintf() debugging....
+//#define  PGBSON_DEBUG
+
+#ifdef PGBSON_DEBUG
+#include <stdio.h>    // only for fprintf() debugging....
+#endif
+
 
 // The Postgres family of #includes
 #include <postgres.h>  // always need this first, and the deps are indented:
@@ -131,6 +136,10 @@ Datum bson_in(PG_FUNCTION_ARGS)
 
     bson_error_t err; // on stack
 
+#ifdef PGBSON_DEBUG
+    (void) fprintf(stderr, "bson_in()\n");
+#endif
+    
     bson_t* b = bson_new_from_json((const uint8_t *)jsons, slen, &err);
 
     if(b != NULL) {
@@ -154,7 +163,7 @@ Datum bson_in(PG_FUNCTION_ARGS)
 }
 
 // This is: get BSON pointer from DB, emit EJSON out
-// VERY important consumers of this are the CLI and and casting
+// VERY important consumers of this are the CLI and the to-JSON casting
 // subsystem.
 PG_FUNCTION_INFO_V1(bson_out);
 Datum bson_out(PG_FUNCTION_ARGS)
@@ -164,6 +173,9 @@ Datum bson_out(PG_FUNCTION_ARGS)
     bson_t b; // on stack
     BSON_STATIC_INIT(&b, aa);
 
+#ifdef PGBSON_DEBUG
+    (void) fprintf(stderr, "bson_out()\n");    
+#endif
     
     //char* jsons = bson_as_json(&b, &blen); 
     // Use relaxed because it makes date handling in SQL MUCH easier...
@@ -216,6 +228,71 @@ Datum bson_recv(PG_FUNCTION_ARGS)
 	
     PG_RETURN_BYTEA_P(aa);
 }
+
+
+// This is: get bytea pointer from outside, validate it is good
+// BSON, then make a copy and return it.
+// Very important for safe insertion of BSON as bytea i.e.
+//   insert into (bson_column) values ('\x000000'::bytea)
+// to avoid as much as possible storing malformed/corrupt BSON
+// It is pgbson_validate() because bson_validate() already exists!
+PG_FUNCTION_INFO_V1(pgbson_validate);
+Datum pgbson_validate(PG_FUNCTION_ARGS)
+{
+#ifdef PGBSON_DEBUG
+    (void) fprintf(stderr, "bson_validate()\n");
+#endif
+    
+    bytea* aa = BSON_GETARG_BSON(0); // No validation here...
+    
+    bson_t b; // on stack
+
+    if(VARSIZE_ANY_EXHDR(aa) < 5) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("bytea too short to be BSON"))
+	    );
+    }
+    
+    bool rc = bson_init_static(&b, BSON_VARDATA_ANY(aa), VARSIZE_ANY_EXHDR(aa));
+
+    if(!rc) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("basic BSON init fails; not BSON?"))
+	    );
+    }
+	
+    bson_error_t error; // on stack
+
+    /*  No need for special checks for mongodb...
+    bson_validate_flags_t flags = BSON_VALIDATE_UTF8
+	| BSON_VALIDATE_DOLLAR_KEYS
+	| BSON_VALIDATE_DOT_KEYS
+	| BSON_VALIDATE_UTF8_ALLOW_NULL
+	| BSON_VALIDATE_EMPTY_KEYS;
+    */
+    
+    bson_validate_flags_t flags = 0; // just walk the structure...
+    rc = bson_validate_with_error(&b, flags, &error);
+    
+    if(!rc) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("invalid BSON"))
+	    // error.message is boring, just "corrupt BSON"; no indication of
+	    // where the corruption occurred.
+	    );	
+    }
+    
+    // OK!
+    bytea* bbb = mk_palloc_bytea(&b);
+
+    PG_FREE_IF_COPY(aa,0);
+    
+    PG_RETURN_BYTEA_P(bbb);
+}
+
 
 /**** 
  operators

@@ -17,6 +17,8 @@
 -- type definition and i/o functions
 ------------------------------------
 
+-- Do this first to establish the type name "bson".  We will need to declare the
+-- "main 4" function in, out, recv, and send.
 CREATE TYPE bson;
 
 -- from-/to- string.  The string is EJSON.
@@ -29,7 +31,8 @@ CREATE FUNCTION bson_recv(internal) RETURNS bson AS 'MODULE_PATHNAME' LANGUAGE C
 
 CREATE FUNCTION bson_send(bson) RETURNS bytea AS 'MODULE_PATHNAME' LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
-
+-- Now that we have the "main 4" functions defined, we can fill out our new
+-- type with the Main 4 functions:
 CREATE TYPE bson (
     input = bson_in,
     output = bson_out,
@@ -39,11 +42,16 @@ CREATE TYPE bson (
     storage = extended  -- Big BSONs will need TOAST!
 );
 
--- This is necessary to permit programmatic i/o to occur otherwise the type
--- checker will complain, for example, that you cannot insert a variable
--- holding a BSON byte array into a column of type BSON.
-CREATE CAST (bytea AS bson) WITHOUT FUNCTION AS IMPLICIT;
+
+-- To prevent storing junk or accidentally malformed BSON into the DB,
+-- we call pgbson_validate during the cast.  Fortunately, testing has shown
+-- the performance hit to be negligible.
+CREATE FUNCTION pgbson_validate(bytea) RETURNS bson AS 'MODULE_PATHNAME' LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
+CREATE CAST (bytea AS bson) WITH FUNCTION pgbson_validate(bytea) AS IMPLICIT;
+
+-- Going the other way, however, is easy; the BSON just comes out as bytea:
 CREATE CAST (bson AS bytea) WITHOUT FUNCTION AS IMPLICIT;
+
 
 -- But here's a great trick.  To turn bson into json, just use bson_out!
 -- It emits data in EJSON format!  Which means...

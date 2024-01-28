@@ -114,7 +114,8 @@ create table bsontest (
     bdata_len integer,    
     bdata2 BSON,
     jbdata jsonb,
-    jdata json
+    jdata json,
+    raw bytea
     );
 """
     try:
@@ -283,7 +284,61 @@ def bson_test():
         if item.__class__.__name__ != 'memoryview':
             msg = "FAIL; SELECT (bson_get_bson(bdata, 'data'))::bytea did not return memoryview (raw bytes)"
             
-    print("bson_test...%s" % msg)    
+    print("bson_test...%s" % msg)
+
+    
+def internal_cast_test():
+    msg = "ok"
+
+    json = '{"A":"X"}'
+    try:
+        curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (json,))
+    except Exception as errmsg:
+        msg = "FAIL; valid JSON did not insert"
+        
+    conn.commit()
+
+    #  BSON must be minimum 5 bytes (4 bytes of length followed by trailing NULL
+    #  byte).   This is a good way to quickly catch clearly malformed data:
+    try:
+        bb = bytes('Z', 'utf-8')
+        curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (bb,))
+        msg = "FAIL; short bytes inserted OK"        
+    except Exception as errmsg:
+        pass  # bytea too short is OK
+    conn.rollback()
+    
+
+    # Craft a good byte array that represents {'A':'A'}:
+    d = bytes([0x0e, 0x00, 0x00, 0x00, 0x02, 0x41, 0x00, 0x02, 0x00, 0x00,0x00,0x41,0x00,0x00])
+    try:
+        curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (d,))
+    except Exception as errmsg:
+        msg = "FAIL: good BSON bytes create insert fail: %s" %  errmsg
+    conn.rollback()
+
+
+    # Deliberately make last byte not NULL, another quick internal test:
+    d = bytes([0x0e, 0x00, 0x00, 0x00, 0x02, 0x41, 0x00, 0x02, 0x00, 0x00,0x00,0x41,0x00,0x01])
+    try:
+        curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (d,))
+        msg = "FAIL: non-NULL last byte did not provoke insert fail"
+    except Exception as errmsg:
+        pass   # basic BSON init fails; not BSON?
+    conn.rollback()    
+
+    
+    # Deliberately corrupt BSON:       Some FF here!  But overall structure
+    # is OK:
+    d = bytes([0x0e, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x02, 0x00, 0x00,0x00,0x41,0x00, 0x00])
+    try:
+        curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (d,))
+        msg = "FAIL: bad BSON bytes did not provoke insert fail"
+    except Exception as errmsg:
+        pass  # good: general "invalid BSON" 
+    conn.rollback()
+    
+    print("internal_cast_test...%s" % msg)        
     
     
 def basic_internal_update():
@@ -439,6 +494,8 @@ use case; bson "on its own" in and out of postgres is not very interesting.
 
     init(rargs)
 
+    internal_cast_test()
+
     # Good for hello world AND making sure compacted Datum headers in
     # extension (1 byte of len header vs. 4 bytes) is working...
     basic_roundtrip({'A':'X'}, "smallest BSON")
@@ -446,7 +503,6 @@ use case; bson "on its own" in and out of postgres is not very interesting.
     toast_test()
 
     bson_test()
-
     
     basic_internal_update()
     scalar_checks()
