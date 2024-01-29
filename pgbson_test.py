@@ -155,14 +155,6 @@ def insert2Bson(pydata,pydata2):
     return (rb7,rb8)
 
 
-def insertAll(pydata):
-    rb7 = safe_bson_encode(pydata)
-    jstr = json.dumps(pydata,default=cvt)
-    curs.execute("TRUNCATE TABLE bsontest")
-    curs.execute("INSERT INTO bsontest (bdata,jdata,jbdata) VALUES (%s,%s,%s)",
-                 (rb7,jstr,jstr))
-    conn.commit()    
-
 
 def get_doc_from_bson(sql):
     curs.execute(sql)
@@ -191,8 +183,13 @@ def fetchRow1Col(sql):
     return items
 
 
-def check1(msg, sql, expected):
-    err = ""
+def check1(args):
+    sql,expected = args
+
+    insertBson(sdata)  # always put in the big structure...
+    
+    msg = None
+    
     item = fetchRow1Col(sql)  # OK to be None
 
     if type(item) is memoryview:
@@ -201,13 +198,9 @@ def check1(msg, sql, expected):
         item = bytes(item)
 
     if expected != item:
-        err = "got\n%s::%s\nexpected\n%s::%s" % (item,type(item),expected,type(expected))
-        
-    if err != "":
-        print("%s...FAIL; %s" % (msg,err))
-    else:
-        print("%s...ok" % msg)
-    
+        msg = "got\n%s::%s\nexpected\n%s::%s" % (item,type(item),expected,type(expected))
+
+    return msg
 
 
 def toast_test():
@@ -229,44 +222,95 @@ to check that the internals are actually doing something."""
     rb2 = fetchRow1Col('SELECT bdata::bytea FROM bsontest')
     # ALT:  select length(bson_get_binary(bdata, 'biggie')) from bsontest;
 
-    msg = "ok"
+    msg = None
     if bson1 != bytes(rb2):  # For compare, must be bytes-to-bytes!
         msg = "FAIL; roundtrip of TOAST sized content does not equal"
     
-    print("toast_test...%s" % msg)    
+    return msg
         
     
+def jsonb_test():  
+    """Here is why jsonb type is not the same as BSON."""
 
+    # Here is some simple data; forget about dates and decimal for the moment:
+    dd = {"B":2,"A":1,"ZZ":0,"C":{"E":2,"D":1}}
+
+    # Store it.  There is no way to directly pass a dictionary; it must be turned into
+    # JSON somehow; we'll use the standard json module:
+    some_json = json.dumps(dd)
+
+    # Get the HASH:
+    h2 = hashlib.sha256(bytes(some_json,'utf-8')).hexdigest()
+    #print("outgoing hash:", h2)
+
+    curs.execute("TRUNCATE TABLE bsontest")
+    curs.execute("INSERT INTO bsontest (jbdata) VALUES (%s)", (some_json,))
+    conn.commit()  
+
+    
+    # Attempt 1:  Fetch with no cast:
+    j2 = fetchRow1Col('SELECT jbdata FROM bsontest' )
+
+    # psycopg2 will by default turn jsonb into a dict...
+    #print(j2.__class__,":",j2)
+    # ... and turning that into a JSON string...
+    s2 = json.dumps(j2)
+    # ... of course yields a DIFFERENT hash:
+    h3 = hashlib.sha256(bytes(s2,'utf-8')).hexdigest()
+    #print("incoming hash:", h3)
+    #print("hashes the same?", h2 == h3)
+
+
+    # Attempt 1:  Fetch casting to string, which will return JSON directly:
+    s2 = fetchRow1Col('SELECT jbdata::text FROM bsontest' )
+    #print(s2.__class__,":",s2)
+    # ... but of course, same problem:
+    h3 = hashlib.sha256(bytes(s2,'utf-8')).hexdigest()
+    #print("incoming hash:", h3)
+    #print("hashes the same?", h2 == h3)    
+
+    msg = None
+    if(h2 != h3):
+        msg = "roundtrip of hashes not the same"
+        
+    return msg
+    
+    
 def binary_checks():
-    msg = "ok"
+    msg = None
 
-    def x(p1,p2,expect,desc):
+    def x(p1,p2,expect):
         result = True
         insert2Bson(p1,p2)        
         rc = fetchRow1Col("SELECT pgbson_compare(bdata,bdata2) FROM bsontest")
         if rc != expect:
-            print("binary_checks...FAIL: pgbson_compare",desc)
             result = False
-            
+        return result
+    
     for tt in [
             ({'foo':{'bar':[1,2,3]}, 'baz':3.14159},
              {'foo':{'bar':[1,2,3]}, 'baz':3.14159},
-             0, "returns non-zero for two identical objects")
+             0,
+             "returns non-zero for two identical objects")
 
             ,({'foo':{'bar':[1,2,3]}, 'baz':3.14159},
              {'foo':{'bar':[1,2]}, 'baz':3.14159},
-             1, "p1 should be > p2")
+              1,
+              "p1 should be > p2")
 
             ,({'foo':{'bar':[1,2]}, 'baz':3.14159},
              {'foo':{'bar':[1,2,7]}, 'baz':3.14159},
-             -1, "p1 should be < p2"
+             -1,
+              "p1 should be < p2"
              )                        
 
     ]:
-        if False == x(tt[0],tt[1],tt[2],tt[3]):
+        if False == x(tt[0],tt[1],tt[2]):
+            msg = tt[3]
             break
 
-    print("binary_checks...%s" % msg)    
+    return msg
+
 
 
 def bson_test():
@@ -274,72 +318,71 @@ def bson_test():
     bson_out() function in the extension to render a text type"""
     insertBson(sdata)
 
-    msg = "ok"
+    msg = None
         
     item = fetchRow1Col("SELECT bson_get_bson(bdata, 'data') FROM bsontest")
     if item.__class__.__name__ != 'str':
-        msg = "FAIL; SELECT bson_get_bson(bdata, 'data') did not return JSON equiv"
+        msg = "SELECT bson_get_bson(bdata, 'data') did not return JSON equiv"
     else:
         item = fetchRow1Col("SELECT (bson_get_bson(bdata, 'data'))::bytea FROM bsontest")
         if item.__class__.__name__ != 'memoryview':
-            msg = "FAIL; SELECT (bson_get_bson(bdata, 'data'))::bytea did not return memoryview (raw bytes)"
-            
-    print("bson_test...%s" % msg)
+            msg = "SELECT (bson_get_bson(bdata, 'data'))::bytea did not return memoryview (raw bytes)"
+    return msg
 
-    
-def internal_cast_test():
-    msg = "ok"
+
+def cast_insert_good_json():
+    msg = None
 
     json = '{"A":"X"}'
     try:
         curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (json,))
     except Exception as errmsg:
-        msg = "FAIL; valid JSON did not insert"
+        msg = "valid JSON did not insert"
         
-    conn.commit()
+    return msg
+    
+
+def cast_short_bson():
+    msg = None
 
     #  BSON must be minimum 5 bytes (4 bytes of length followed by trailing NULL
     #  byte).   This is a good way to quickly catch clearly malformed data:
     try:
         bb = bytes('Z', 'utf-8')
         curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (bb,))
-        msg = "FAIL; short bytes inserted OK"        
+        msg = "malformed BSON (short bytes) inserted OK"        
     except Exception as errmsg:
         pass  # bytea too short is OK
-    conn.rollback()
+
+    return msg
     
 
-    # Craft a good byte array that represents {'A':'A'}:
-    d = bytes([0x0e, 0x00, 0x00, 0x00, 0x02, 0x41, 0x00, 0x02, 0x00, 0x00,0x00,0x41,0x00,0x00])
-    try:
-        curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (d,))
-    except Exception as errmsg:
-        msg = "FAIL: good BSON bytes create insert fail: %s" %  errmsg
-    conn.rollback()
-
-
-    # Deliberately make last byte not NULL, another quick internal test:
+def cast_badnull_bson():
+    msg = None
+    # Craft a good byte array that represents {'A':'A'} but then
+    # deliberately make last byte not NULL, another quick internal test:
     d = bytes([0x0e, 0x00, 0x00, 0x00, 0x02, 0x41, 0x00, 0x02, 0x00, 0x00,0x00,0x41,0x00,0x01])
     try:
         curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (d,))
-        msg = "FAIL: non-NULL last byte did not provoke insert fail"
+        msg = "non-NULL last byte did not provoke insert fail"
     except Exception as errmsg:
-        pass   # basic BSON init fails; not BSON?
-    conn.rollback()    
+        pass   # good to raise exception
 
-    
+    return msg
+
+def cast_corrupt_bson():
+    msg = None
     # Deliberately corrupt BSON:       Some FF here!  But overall structure
     # is OK:
     d = bytes([0x0e, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x02, 0x00, 0x00,0x00,0x41,0x00, 0x00])
     try:
         curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (d,))
-        msg = "FAIL: bad BSON bytes did not provoke insert fail"
+        msg = "bad BSON bytes did not provoke insert fail"
     except Exception as errmsg:
-        pass  # good: general "invalid BSON" 
-    conn.rollback()
-    
-    print("internal_cast_test...%s" % msg)        
-    
+        pass  # good: general "invalid BSON"
+
+    return msg
+
     
 def basic_internal_update():
     insertBson(sdata)
@@ -352,12 +395,12 @@ def basic_internal_update():
     # Basic internal matching:
     rc = fetchRow1Col("SELECT bdata2 = bdata FROM bsontest")
     if rc != True:
-        msg = "FAIL; internal update of bdata2 = bdata do not equal"
+        msg = "internal update of bdata2 = bdata do not equal"
 
     # Go for roundtrip:
     (rb1, rb2) = fetchRowNCol("SELECT bdata::bytea, bdata2::bytea FROM bsontest",2)   
     if rb1 != rb2:
-        msg = "FAIL; fetch of bdata2 and bdata yields non-equal BSON"
+        msg = "fetch of bdata2 and bdata yields non-equal BSON"
 
     rb4 = rb1
     if True:
@@ -374,18 +417,19 @@ def basic_internal_update():
 
     rc = fetchRow1Col("SELECT bdata2 = bdata FROM bsontest")
     if rc != False:
-        msg = "FAIL; bdata2 should not equal bdata after deliberate hack"
-    
-    if msg is None:
-        msg = "ok"
+        msg = "bdata2 should not equal bdata after deliberate hack"
         
-    print("basic_internal_update...%s" % msg)    
+    return msg
 
     
     
 
-def basic_roundtrip(pydata,tname):
+def basic_roundtrip(args):
     """If this does not work, the whole thing is pointless."""
+
+    pydata = args[0]
+
+    msg = None
 
     insertBson(pydata)
     
@@ -401,80 +445,35 @@ def basic_roundtrip(pydata,tname):
     
     bson3 = fetchRow1Col("SELECT bdata::bytea FROM bsontest where marker = 'ZZZ'")
     
-    msg = "ok"
-
     if bytes(bson1) != bytes(bson3):
-        msg = "FAIL; roundtrip bytes do not equal"
+        msg = "roundtrip bytes do not equal"
     
-    print("basic_roundtrip %s: %s" % (tname,msg))
+    return msg
         
 
-def scalar_checks():
-    insertBson(sdata)
 
-    raw_bson = safe_bson_encode(sdata)    
-    check1("basic roundtrip", 'SELECT bdata::bytea FROM bsontest', raw_bson)
-
-    check1("string exists", "SELECT bson_get_string(bdata, 'header.type') FROM bsontest", "X")
-    check1("string !exists", "SELECT bson_get_string(bdata, 'header.NOT_IN_FILM') FROM bsontest", None)
-    check1("nested string exists", "SELECT bson_get_string(bdata, 'data.sub1.sub2.corn') FROM bsontest", "dog")    
-    check1("decimal exists", "SELECT bson_get_decimal128(bdata, 'data.amt') FROM bsontest", a_decimal)
-    check1("datetime exists", "SELECT bson_get_datetime(bdata, 'data.txDate') FROM bsontest", a_datetime)
-
-
-def arrow_checks():
-    insertBson(sdata)
-
-    # '0' in quotes for bson...
-    check1("bson arrow nav", """
-select bson_get_string(bdata,'header.evId') from bsontest where bdata->'data'->'userPrefs'->'0'->>'type' = 'DEP'
-    """, "E23234")
-
-    # 0 is integer for jsonb...
-    check1("jsonb cast arrow nav", """
-select bson_get_string(bdata,'header.evId') from bsontest where (bdata->'data')::jsonb->'userPrefs'->0->>'type' = 'DEP';
-    """, "E23234")
-    
-    
+def create_view():
+    msg = None
+    try:
+        curs.execute("""
+        CREATE VIEW conv1 AS
+        select
+        bson_get_string(bdata, 'data.recordId') as recordId,
+        bson_get_datetime(bdata, 'data.txDate') as ts,
+        bson_get_decimal128(bdata, 'data.amt') as amt,    
+        bdata as bdata
+        from bsontest
+        """)
+    except Exception as err:    
+        msg = str(err)  # invoke "toString"
         
-def view_1():
-    insertBson(sdata)
-    
-    curs.execute("""
-    CREATE VIEW conv1 AS
-    select
-      bson_get_string(bdata, 'data.recordId') as recordId,
-      bson_get_datetime(bdata, 'data.txDate') as ts,
-      bson_get_decimal128(bdata, 'data.amt') as amt,    
-      bdata as bdata
-    from bsontest
-    """)
     conn.commit()
 
-    check1("scalar ts via view",
-           "SELECT ts FROM conv1 where recordId = 'ID0'",
-           a_datetime)
+    return msg
+    
 
-    # Check a_datetime above; it is AFTER midnight on 6/6/2022:
-    check1("scalar recordId via view",
-           "SELECT recordId FROM conv1 where ts > '2022-06-06'::date",
-           'ID0')
 
-    check1("!scalar recordId via view",
-           "SELECT recordId FROM conv1 where ts < '2022-06-06'::date",
-           None)    
 
-    # We use checks of actual python expressions (e.g. a_decimal * 2) because
-    # that is the use case we are testing against.  It's not just the number;
-    # it is the path you take in computing it.
-    check1("fancy multiplication via view",
-           "SELECT amt * 2 FROM conv1 where recordId = 'ID0'",
-           a_decimal * 2)
-
-    check1("fancy addition via view",
-           "SELECT amt - 5.55 FROM conv1 where recordId = 'ID0'",
-           a_decimal - Decimal("5.55")) # Need to make 5.55 Decimal for
-                                        # proper handling with a_decimal
 
     
     
@@ -494,24 +493,134 @@ use case; bson "on its own" in and out of postgres is not very interesting.
 
     init(rargs)
 
-    internal_cast_test()
+    #  Tests with - will be run.
+    #  Replace one or more '-' with 'S' for (S)olo.  Like a mixing board,
+    #  this will only run tests marked 'S'.
+    #  Replace one or more '-' with 'M' for (M)ute.  The test will be
+    #  skipped and reported as such
+    all_tests = [
+        {'M':jsonb_test }  # No need to rub in the salt....
 
-    # Good for hello world AND making sure compacted Datum headers in
-    # extension (1 byte of len header vs. 4 bytes) is working...
-    basic_roundtrip({'A':'X'}, "smallest BSON")
-    basic_roundtrip(sdata, "big structure")
-    toast_test()
+        ,{'-':cast_insert_good_json}
+        ,{'-':cast_short_bson}
+        ,{'-':cast_badnull_bson}
+        ,{'-':cast_corrupt_bson}                
 
-    bson_test()
+        ,{'-':basic_roundtrip, 'desc':"roundtrip smallest BSON", "args":[{'A':'X'}]}
+        ,{'-':basic_roundtrip, 'desc':"roundtrip BIG structure", "args":[sdata]}    
+        ,{'-':toast_test }
+        ,{'-':bson_test }
+        ,{'-':basic_internal_update}
+
+        ,{'-':check1, 'desc':"string exists",
+          "args": ["SELECT bson_get_string(bdata, 'header.type') FROM bsontest", "X"] }
+        ,{'-':check1, 'desc':"string !exists",
+          "args": ["SELECT bson_get_string(bdata, 'header.NOT_IN_FILM') FROM bsontest", None] }
+        ,{'-':check1, 'desc':"nested string exists",
+          "args": ["SELECT bson_get_string(bdata, 'data.sub1.sub2.corn') FROM bsontest", 'dog'] }
+        ,{'-':check1, 'desc':"decimal exists",
+          "args": ["SELECT bson_get_decimal128(bdata, 'data.amt') FROM bsontest", a_decimal ] }
+        ,{'-':check1, 'desc':"datetime exists",
+          "args": ["SELECT bson_get_datetime(bdata, 'data.txDate') FROM bsontest", a_datetime ] }
+
+        ,{'-':binary_checks}  # should be broken up....
+
+        # '0' in quotes for bson...        
+        ,{'-':check1, 'desc':"bson arrow nav",
+          "args": [ """
+select bson_get_string(bdata,'header.evId') from bsontest
+where bdata->'data'->'userPrefs'->'0'->>'type' = 'DEP'
+    """, "E23234" ] }
+
+        # 0 is integer for jsonb; note also the jsonb cast...
+        ,{'-':check1, 'desc':"jsonb cast arrow nav",
+          "args": [ """
+select bson_get_string(bdata,'header.evId') from bsontest
+where (bdata->'data')::jsonb->'userPrefs'->0->>'type' = 'DEP'
+    """, "E23234" ] }
+
+        ,{'-':create_view}
+
+        ,{'-':check1, 'desc':"scalar ts via view",
+          "args": [ "SELECT ts FROM conv1 where recordId = 'ID0'", a_datetime ] }
+
+        # Check a_datetime above; it is AFTER midnight on 6/6/2022:
+        ,{'-':check1, 'desc':"scalar recordId via view",
+          "args": [ "SELECT recordId FROM conv1 where ts > '2022-06-06'::date",'ID0' ] }
+
+        # We use checks of actual python expressions (e.g. a_decimal * 2)
+        # because that is the use case we are testing against.  It's not just
+        # the number; it is the path you take in computing it.        
+        ,{'-':check1, 'desc':"fancy multiplication via view",
+          "args": [ "SELECT amt * 2 FROM conv1 where recordId = 'ID0'", a_decimal * 2 ] }
+
+
+
+        # Need to make 5.55 Decimal for proper handling with a_decimal!
+        ,{'-':check1, 'desc':"fancy subtraction via view",
+          "args": [ "SELECT amt - 5.55 FROM conv1 where recordId = 'ID0'",
+                    a_decimal - Decimal("5.55")
+                    ]}
+
+    ]
+
+    tests = []
     
-    basic_internal_update()
-    scalar_checks()
-    binary_checks()   
+    for t in all_tests:
+        if 'S' in t:
+            # Solos exist; rework the tests list to contain only solos:
+            for t2 in all_tests:
+                if 'S' in t2:
+                    t2['-'] = t2['S']
+                    tests.append(t2)
+            break
 
-    arrow_checks()
+    if len(tests) == 0:
+        tests = all_tests # no solos, so use all_tests
 
-    view_1()
+    # Get the longest description for nice formatting
+    maxnlen = 0
+    for t in tests:
+        if 'M' in t:
+            fn = t['M']
+        elif '-' in t:
+            fn = t['-']
+        if 'desc' not in t:
+            t['desc'] = fn.__name__
+        x = len(t['desc'])
+        if x > maxnlen:
+            maxnlen = x
 
+    class Color:
+        GREEN = '\033[92m'
+        RED = '\033[91m'
+        RESET = '\033[0m'
+            
+    for t in tests:
+        if 'M' in t:
+            print(f"{t['desc']:<{maxnlen}} : skip")
+            continue
+        elif '-' in t:
+            ff = t['-']
+        else:
+            ff = t['S']
 
+        try:
+            if 'args' in t:
+                msg = ff(t['args'])
+            else:
+                msg = ff()
+        except Exception as err:
+            msg = str(err)
+
+        if msg is not None:
+            msg = f": {Color.RED}FAIL{Color.RESET}: {msg}"
+        else:
+            msg = f": {Color.GREEN}ok{Color.RESET}"
+            
+        print(f"{t['desc']:<{maxnlen}}",msg)
+
+        conn.rollback() # always recover...
+    
 if __name__ == "__main__":        
     main(sys.argv)
