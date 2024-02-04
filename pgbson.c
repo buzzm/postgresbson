@@ -16,7 +16,7 @@
 #undef LOG
 #endif
 
-//#define  PGBSON_DEBUG
+#define  PGBSON_DEBUG
 
 #ifdef PGBSON_DEBUG
 #include <stdio.h>    // only for fprintf() debugging....
@@ -557,14 +557,12 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
     if(!bson_iter_init (&iter, &b)) {
 	ereport(
 	    ERROR,
-	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON bytes corrupted in bson_get_bson"))
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON iter bytes corrupted in bson_get_bson"))
 	    );
     }
 
     char* c_dotpath = text_to_cstring(dotpath);
-    
     bool rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
-
     pfree(c_dotpath); // dotpath no longer needed
     
     if(rc) {
@@ -595,6 +593,71 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 	    PG_FREE_IF_COPY(aa,0); // free the original if necessary...
     
 	    PG_RETURN_BYTEA_P(bbb); // return newly alloced material
+	}
+    }
+    
+    PG_FREE_IF_COPY(aa,0);
+    PG_RETURN_NULL();
+}
+
+
+PG_FUNCTION_INFO_V1(bson_get_jsonb_array);
+Datum bson_get_jsonb_array(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG_BSON(0);    
+    text* dotpath = PG_GETARG_TEXT_PP(1);
+
+    bson_t b; // on stack
+    BSON_STATIC_INIT(&b,aa);
+
+    bson_iter_t iter;
+    bson_iter_t target;
+
+    if(!bson_iter_init (&iter, &b)) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON iter bytes corrupted in bson_get_bson"))
+	    );
+    }
+
+    char* c_dotpath = text_to_cstring(dotpath);
+    bool rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
+    pfree(c_dotpath); // dotpath no longer needed
+    
+    if(rc) {
+	uint32_t subdoc_len;
+	const uint8_t* subdoc_data = 0;
+
+	bson_type_t ft = bson_iter_type(&target);
+	switch(ft) {
+	case BSON_TYPE_DOCUMENT:  {
+	    bson_iter_document(&target, &subdoc_len, &subdoc_data);
+	    break;
+	}
+	case BSON_TYPE_ARRAY:  {
+	    bson_iter_array(&target, &subdoc_len, &subdoc_data);
+	    break;
+	}
+	default: {
+	    // ?  TBD How to "better" handle "object representation" of
+	    // noncomplex types
+	}
+	}
+	if(subdoc_data != 0) {
+	    bson_t b2; // on stack
+	    bson_init_static(&b2, subdoc_data, subdoc_len);
+
+	    size_t blen;
+	    char* jsons = bson_array_as_json(&b2, &blen); // Phew!!
+
+	    // Well HELLO there!
+	    Jsonb *targetjsonbvar =
+		DatumGetJsonbP(DirectFunctionCall1(jsonb_in, CStringGetDatum(jsons)));
+	    bson_free(jsons); // per bson.h
+	    
+	    PG_FREE_IF_COPY(aa,0);
+
+	    PG_RETURN_POINTER(targetjsonbvar);	    
 	}
     }
     
@@ -877,47 +940,39 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 }
 
 /*
-Experimental
+Experimental.  Will pursue one day, but bson_get_jsonb_array is DEF
+good enough for the moment!
 
-The idea here is bson_get_array directly returns a jsonb so you do NOT
-have to "back up" the dotpath to prevent the _to_bson() machinery exposing
-the array as {"0":val1, "1":val2, ...}.  Given path.to.vector exists, then:
+PG_FUNCTION_INFO_V1(bson_get_array_jsonb);
+Datum bson_get_array_jsonb(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG_BSON(0);    
+    text* dotpath = PG_GETARG_TEXT_PP(1);
 
-Meh:     select (bson_get_bson(bdata, 'path.to')::jsonb)->'vector'->>0 
+    (void) fprintf(stderr, "bson_get_array_jsonb()\n");
+    
+    JsonbPair *pair = palloc(sizeof(JsonbPair));
+    pair->key.type = jbvString;
+    pair->key.val.string.len = 3;
+    pair->key.val.string.val = "foo";
 
-Better!  select bson_get_array(bson_column, 'path.to.vector')->>0
-
-This also has the benefit of not forcing the to-jsonb conversion of *all*
-the fields in path.to.  If path.to.really_big_thing was a peer field to
-vector, then resources would be wasting in converting it only to ignore it in
-the subsequent arrow operator to get 'vector'.
-
-Note in both cases, the double arrow operator is used as a terminal
-operator to yield a text type.  If you want to treat it as, say, an integer,
-then you must cast it "manually":
-
-Meh:     select ((bson_get_bson(bdata, 'path.to')::jsonb)->'vector'->>0)::int
-
-Better!  select (bson_get_array(bson_column, 'path.to.vector')->>0)::int
-
-PG_FUNCTION_INFO_V1(bson_get_array);
-Datum bson_get_array(PG_FUNCTION_ARGS) {
-  JsonbPair *pair = palloc(sizeof(JsonbPair));
-  pair->key.type = jbvString;
-  pair->key.val.string.len = 3;
-  pair->key.val.string.val = "foo";
-
-  pair->value.type = jbvNumeric;
-  pair->value.val.numeric = DatumGetNumeric(DirectFunctionCall1(int8_numeric, (int64_t)100));
+    pair->value.type = jbvNumeric;
+    pair->value.val.numeric = DatumGetNumeric(DirectFunctionCall1(int8_numeric, (int64_t)100));
   
-  JsonbValue *object = palloc(sizeof(JsonbValue));
-  object->type = jbvObject;
-  object->val.object.nPairs = 1;
-  object->val.object.pairs = pair;
+    JsonbValue *object = palloc(sizeof(JsonbValue));
+    object->type = jbvObject;
+    object->val.object.nPairs = 1;
+    object->val.object.pairs = pair;
 
-  PG_RETURN_POINTER(JsonbValueToJsonb(object));
+
+    JsonbValue *arr = palloc(sizeof(JsonbValue));
+    object->type = jbvArray;
+    object->val.array.nElems = 1;
+    object->val.array.elems = object;    
+    
+    PG_RETURN_POINTER(JsonbValueToJsonb(object));
 }
- */
+*/
 
 /*
 PG_FUNCTION_INFO_V1(bson_get_array);

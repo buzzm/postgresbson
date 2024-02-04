@@ -87,7 +87,14 @@ sdata = {
                 "atomsInPlanet": 283572834759209881,
                 "pi": 3.1415926
                 }}
-            ]
+            ],
+        "payments": [
+            {"date": makeDatetime(2022,5,5,12,0,0,0), "amt": makeDecimal128("10.09")}
+            ,{"date": makeDatetime(2022,6,8,12,0,0,0), "amt": makeDecimal128("98.23")}
+            ,{"date": makeDatetime(2022,7,1,12,0,0,0), "amt": makeDecimal128("212.87")}
+            ,{"date": makeDatetime(2022,8,1,12,0,0,0), "amt": makeDecimal128("154.55")}
+            ,{"date": makeDatetime(2022,9,1,12,0,0,0), "amt": makeDecimal128("154.55")}                                                
+        ]
     }
 }
 
@@ -384,6 +391,91 @@ def cast_corrupt_bson():
     return msg
 
     
+def ejson_builtin_test1():
+    msg = None
+    
+    insertBson(sdata)
+
+    #  Fancy!  This will take payments array, add a new payment, delete
+    #  the oldest (first) one, and update the record!
+
+    new_pmt = '{"amt": {"$numberDecimal": "888"}, "date": {"$date": "2023-11-11T12:00:00Z"}}'
+
+    #  Notes:
+    #  1.  We use jsonb_set() to touch only the {data,payments} path
+    #  2.  We append a new EJSON payment object with the || operator
+    #  3.  We use -0 to remove the zeroeth element
+    sql = """
+update bsontest set bdata = jsonb_set(bdata::jsonb, '{data,payments}', ((((bdata->'data')::jsonb)->'payments' || '%s') - 0))::bson
+    """ % new_pmt
+
+    curs.execute(sql);
+    conn.commit()
+    
+    sql = """
+select (bdata->'data'->'payments'->'0'->>'amt')::numeric from bsontest;
+    """
+    item = fetchRow1Col(sql)  # OK to be None
+
+    #  Careful:  Pulling casted numerics from postgres yields Decimal
+    #  in psycopg, NOT bson.decimal128; this is OK.
+    exp = "98.23"
+    if item != Decimal(exp):
+        msg = "expected new first payment to be [%s], got [%s]" % (exp,item)
+
+    # select bson_to_jsonb_array(bdata,'data.payments')
+        
+    else:
+        sql = """
+        select jsonb_array_length(((bdata->'data')::jsonb)->'payments') from bsontest
+        """
+        item = fetchRow1Col(sql)  # OK to be None
+        if item != 5:
+            msg = "expected payment array length to remain 5, got [%s]" % item
+        
+    return msg
+
+
+def ejson_builtin_test2():
+    msg = None
+    
+    insertBson(sdata)
+
+    # Sort of the same but using bson_get_jsonb_array
+    
+    new_pmt = '{"amt": {"$numberDecimal": "888"}, "date": {"$date": "2023-11-11T12:00:00Z"}}'
+
+    sql = """
+update bsontest set bdata = jsonb_set(bdata::jsonb, '{data,payments}', (( bson_get_jsonb_array(bdata,'data.payments') || '%s') - 0))::bson
+    """ % new_pmt
+
+    curs.execute(sql);
+    conn.commit()
+    
+    sql = """
+select (bdata->'data'->'payments'->'0'->>'amt')::numeric from bsontest;
+    """
+    item = fetchRow1Col(sql)  # OK to be None
+
+    #  Careful:  Pulling casted numerics from postgres yields Decimal
+    #  in psycopg, NOT bson.decimal128; this is OK.
+    exp = "98.23"
+    if item != Decimal(exp):
+        msg = "expected new first payment to be [%s], got [%s]" % (exp,item)
+
+    # select bson_to_jsonb_array(bdata,'data.payments')
+        
+    else:
+        sql = """
+        select jsonb_array_length(bson_get_jsonb_array(bdata,'data.payments')) from bsontest
+        """
+        item = fetchRow1Col(sql)  # OK to be None
+        if item != 5:
+            msg = "expected payment array length to remain 5, got [%s]" % item
+        
+    return msg
+
+
 def basic_internal_update():
     insertBson(sdata)
 
@@ -495,12 +587,19 @@ use case; bson "on its own" in and out of postgres is not very interesting.
 
     #  Tests with - will be run.
     #  Replace one or more '-' with 'S' for (S)olo.  Like a mixing board,
-    #  this will only run tests marked 'S'.
+    #  this will only run tests marked 'S'. Note that once any one test is
+    #  marked (S), all other tests are skipped and NOT reported as such.
+    #
     #  Replace one or more '-' with 'M' for (M)ute.  The test will be
-    #  skipped and reported as such
+    #  skipped but it WILL be reported as such.  
+    #  
+    #  Standard way to add test is set it up solo to start, get it to work,
+    #  then un-solo to add it to the overall test suite.
+    #
     all_tests = [
         {'M':jsonb_test }  # No need to rub in the salt....
 
+        
         ,{'-':cast_insert_good_json}
         ,{'-':cast_short_bson}
         ,{'-':cast_badnull_bson}
@@ -555,13 +654,14 @@ where (bdata->'data')::jsonb->'userPrefs'->0->>'type' = 'DEP'
           "args": [ "SELECT amt * 2 FROM conv1 where recordId = 'ID0'", a_decimal * 2 ] }
 
 
-
         # Need to make 5.55 Decimal for proper handling with a_decimal!
         ,{'-':check1, 'desc':"fancy subtraction via view",
           "args": [ "SELECT amt - 5.55 FROM conv1 where recordId = 'ID0'",
                     a_decimal - Decimal("5.55")
                     ]}
 
+        ,{'-':ejson_builtin_test1} # pretty cool
+        ,{'-':ejson_builtin_test2} # pretty cool
     ]
 
     tests = []

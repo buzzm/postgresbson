@@ -105,14 +105,10 @@ The extension offers two kinds of accessor suites:
 The BSON type is castable to JSON in so-called [EJSON](https://www.mongodb.com/docs/manual/reference/mongodb-extended-json/) format to preserve type fidelity.
 Thus, the wealth
 of functions and operations and even other extensions built around the JSON type
-can be used on BSON.
-
-    select json_array_length(bson_column::json->'d'->'payload'->'vector') from table;
-
-These of course can be combined:
+can be used on BSON.  These of course can be combined:
 
     -- Use dotpath to quickly get to event substructure, then cast to jsonb and
-    -- use ?@ operator to ask if both `id` and `type` are present as top level tags:
+    -- use ?& operator to ask if both `id` and `type` are present as top level tags:
     select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?@ array['id','type'] from table;
 
 
@@ -189,11 +185,10 @@ Arrays, BSON, and JSON
 Unlike JSON, BSON can only be created from a key:value object (which can be
 empty); it cannot be created from a simple scalar or in particular an array.
 In the course of descending into substructure, it is of course possible to
-encounter an array and have that returned.  The C library gets around this
+encounter an array and have that returned.  The BSON spec gets around this
 problem by returning a string indexed object where the keys
 are the integer representation of the location in the array starting at offset
-zero.  From the CLI,
-this will be seen as:
+zero.  From the CLI, this will be seen as:
 
     select bson_column->'d'->'payload'->'vector' from ...
       returns  {"0":"some value", "1":"another value", "2":{fldx:"a rich shape"}}
@@ -202,9 +197,9 @@ this will be seen as:
 The postgres array type does not help here because postgres requires a
 homogenous type and BSON allows for heterogenous types.  
 
-There are two ways to deal with this:
+There are three ways to deal with this:
 
-  1.  Access items using strings; note the double arrow!
+  1.  If you don't need the whole array, access individual items using strings; note the double arrow and the quotes around '0':
       ```
       select bson_column->'d'->'payload'->'vector'->>'0' from ...
       ```      	     						 
@@ -216,12 +211,36 @@ There are two ways to deal with this:
       --------------
       [21, 17, 19]
 
+      Note no quotes around 0 because now it is jsonb:
       mydb=# select (bson_column->'d'->'payload')::jsonb->'vector'->>0 from ...
        ?column?   
       --------------
       21
       ```
 
+  3.  Use the `bson_get_jsonb_array` function:
+      ```
+      mydb=# select bson_get_jsonb_array(bson_column,'d.payload.vector') from ...
+       ?column?   
+      --------------
+      [21, 17, 19]
+
+      mydb=# select bson_get_jsonb_array(bson_column,'d.payload.vector')->0 from ...
+       ?column?   
+      --------------
+      21
+      ```
+      The subtle but at times very important benefit of `bson_get_jsonb_array`
+      over approach #2 above is that the dotpath will quickly and efficiently
+      navigate to just the `vector`.  The issue with "backing up one level" is
+      that if `payload` is very big, the whole structure must be converted to
+      `jsonb` only to pull out what could be a small `vector`.
+
+      Remember: For objects, if you wish to use the `jsonb` functions, simply
+      cast to `jsonb`:
+      ```
+      mydb=# select (bson_column,'d.payload')::jsonb ...
+      ```
 
 Status
 ======
@@ -485,6 +504,8 @@ Field access (supports dot notation):
 *  bson_get_boolean(bson_column, dotpath) RETURNS boolean
 
 *  bson_get_bson(bson_column, dotpath) RETURNS bson
+
+*  bson_get_jsonb_array(bson_column, dotpath) RETURNS jsonb
 
 *  bson_as_text(bson_column, dotpath) RETURNS text
 

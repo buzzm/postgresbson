@@ -53,11 +53,16 @@ CREATE CAST (bytea AS bson) WITH FUNCTION pgbson_validate(bytea) AS IMPLICIT;
 CREATE CAST (bson AS bytea) WITHOUT FUNCTION AS IMPLICIT;
 
 
--- But here's a great trick.  To turn bson into json, just use bson_out!
+-- But here's a great trick:
+--   To turn bson into json, just use bson_out!
+--   To turn json(b) into bson, just use bson_in!
 -- It emits data in EJSON format!  Which means...
 -- ALL functions and expressions in Postgres JSON are now available to you.
 CREATE CAST (bson AS json) WITH INOUT;
 CREATE CAST (bson AS jsonb) WITH INOUT;
+
+CREATE CAST (jsonb AS bson) WITH INOUT;
+CREATE CAST (json AS bson) WITH INOUT;
 
 
 ------------
@@ -273,9 +278,19 @@ LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 --
 --   select json_array_length(bson_get_bson(data, 'a.b.c')::json->'vector') from btest;
 --
+-- It is also "the" function to call from client-side programs
+-- to fetch BSON in native form (returned to program drivers as bytea)
+-- 
 CREATE FUNCTION bson_get_bson(bson, text) RETURNS bson
 AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
+
+
+-- EXPERIMENTAL
+CREATE FUNCTION bson_get_jsonb_array(bson, text) RETURNS jsonb
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
+
 
 
 
