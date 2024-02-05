@@ -423,11 +423,9 @@ select (bdata->'data'->'payments'->'0'->>'amt')::numeric from bsontest;
     if item != Decimal(exp):
         msg = "expected new first payment to be [%s], got [%s]" % (exp,item)
 
-    # select bson_to_jsonb_array(bdata,'data.payments')
-        
     else:
         sql = """
-        select jsonb_array_length(((bdata->'data')::jsonb)->'payments') from bsontest
+select jsonb_array_length(((bdata->'data')::jsonb)->'payments') from bsontest
         """
         item = fetchRow1Col(sql)  # OK to be None
         if item != 5:
@@ -474,6 +472,29 @@ select (bdata->'data'->'payments'->'0'->>'amt')::numeric from bsontest;
             msg = "expected payment array length to remain 5, got [%s]" % item
         
     return msg
+
+
+
+def array_update():
+    msg = None
+    
+    insertBson(sdata)
+
+    # Sort of the same but using BSON
+    
+    new_pmt = {"amt": makeDecimal128(a_decimal), "date":makeDatetime(2022,5,5,12,13,14,456)}
+    rb7 = safe_bson_encode(new_pmt)
+    
+    sql = """
+update bsontest set bdata = jsonb_set(bdata::jsonb, '{data,payments}', (( bson_get_jsonb_array(bdata,'data.payments') || %s) - 0))::bson
+    """
+
+    curs.execute(sql, (rb7,));
+    conn.commit()
+        
+    return msg
+
+
 
 
 def basic_internal_update():
@@ -661,7 +682,11 @@ where (bdata->'data')::jsonb->'userPrefs'->0->>'type' = 'DEP'
                     ]}
 
         ,{'-':ejson_builtin_test1} # pretty cool
-        ,{'-':ejson_builtin_test2} # pretty cool
+        ,{'-':ejson_builtin_test2}
+
+        # Cannot directly cast BSON bytea to jsonb in complex expression.
+        # That is OK; leave it muted for now.
+        ,{'M':array_update}
     ]
 
     tests = []

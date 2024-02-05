@@ -109,7 +109,7 @@ can be used on BSON.  These of course can be combined:
 
     -- Use dotpath to quickly get to event substructure, then cast to jsonb and
     -- use ?& operator to ask if both `id` and `type` are present as top level tags:
-    select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?@ array['id','type'] from table;
+    select (bson_get_bson(bson_column, 'msg.header.event')::jsonb) ?& array['id','type'] from table;
 
 
 Why dotpath accessors are better in BSON (*and* native json and jsonb, too)

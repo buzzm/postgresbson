@@ -16,7 +16,7 @@
 #undef LOG
 #endif
 
-#define  PGBSON_DEBUG
+//#define  PGBSON_DEBUG
 
 #ifdef PGBSON_DEBUG
 #include <stdio.h>    // only for fprintf() debugging....
@@ -453,7 +453,7 @@ static Timestamp _cvt_datetime_to_ts(int64_t millis_since_epoch)
     time_t t_unix = millis_since_epoch/1000; // get seconds..
     unsigned t_ms = millis_since_epoch%1000; // ... and the millis...
 
-    struct tm unix_tm = *gmtime(&t_unix); // * in front of function...?
+    struct tm unix_tm = *gmtime(&t_unix); // gmtime returns pointer; copy via *
 
     tt.tm_mday = unix_tm.tm_mday;
     tt.tm_mon  = unix_tm.tm_mon + 1;  // POSIX is 0-11; must add 1 for postgres
@@ -541,20 +541,12 @@ Datum bson_get_decimal128(PG_FUNCTION_ARGS)
 }
 
 
-
-PG_FUNCTION_INFO_V1(bson_get_bson);  // bson bson_get_bson(bson, dotpath)
-Datum bson_get_bson(PG_FUNCTION_ARGS)
+static bool _get_obj_or_arr(bson_t* parent, text* dotpath, bson_t* child)
 {
-    bytea* aa = BSON_GETARG_BSON(0);    
-    text* dotpath = PG_GETARG_TEXT_PP(1);
-
-    bson_t b; // on stack
-    BSON_STATIC_INIT(&b,aa);
-
     bson_iter_t iter;
     bson_iter_t target;
 
-    if(!bson_iter_init (&iter, &b)) {
+    if(!bson_iter_init (&iter, parent)) {
 	ereport(
 	    ERROR,
 	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON iter bytes corrupted in bson_get_bson"))
@@ -585,15 +577,30 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 	}
 	}
 	if(subdoc_data != 0) {
-	    bson_t b2; // on stack
-	    bson_init_static(&b2, subdoc_data, subdoc_len);
-
-	    bytea* bbb = mk_palloc_bytea(&b2); // alloc a *new* bytea to hold b2
-
-	    PG_FREE_IF_COPY(aa,0); // free the original if necessary...
-    
-	    PG_RETURN_BYTEA_P(bbb); // return newly alloced material
+	    bson_init_static(child, subdoc_data, subdoc_len);
 	}
+    }
+    
+    return rc;
+}
+    
+
+PG_FUNCTION_INFO_V1(bson_get_bson);  // bson bson_get_bson(bson, dotpath)
+Datum bson_get_bson(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG_BSON(0);    
+    text* dotpath = PG_GETARG_TEXT_PP(1);
+
+    bson_t b; // on stack
+    BSON_STATIC_INIT(&b,aa);
+
+    bson_t b2; // on stack    
+    bool rc = _get_obj_or_arr(&b, dotpath, &b2);
+    
+    if(rc) {
+	bytea* bbb = mk_palloc_bytea(&b2); // alloc a *new* bytea to hold b2
+	PG_FREE_IF_COPY(aa,0); // free the original if necessary...
+	PG_RETURN_BYTEA_P(bbb); // return newly alloced material
     }
     
     PG_FREE_IF_COPY(aa,0);
@@ -610,55 +617,22 @@ Datum bson_get_jsonb_array(PG_FUNCTION_ARGS)
     bson_t b; // on stack
     BSON_STATIC_INIT(&b,aa);
 
-    bson_iter_t iter;
-    bson_iter_t target;
+    bson_t b2; // on stack    
+    bool rc = _get_obj_or_arr(&b, dotpath, &b2);
 
-    if(!bson_iter_init (&iter, &b)) {
-	ereport(
-	    ERROR,
-	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON iter bytes corrupted in bson_get_bson"))
-	    );
-    }
-
-    char* c_dotpath = text_to_cstring(dotpath);
-    bool rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
-    pfree(c_dotpath); // dotpath no longer needed
-    
     if(rc) {
-	uint32_t subdoc_len;
-	const uint8_t* subdoc_data = 0;
+	size_t blen;
+	// This is what makes it all possible:
+	char* jsons = bson_array_as_json(&b2, &blen);
 
-	bson_type_t ft = bson_iter_type(&target);
-	switch(ft) {
-	case BSON_TYPE_DOCUMENT:  {
-	    bson_iter_document(&target, &subdoc_len, &subdoc_data);
-	    break;
-	}
-	case BSON_TYPE_ARRAY:  {
-	    bson_iter_array(&target, &subdoc_len, &subdoc_data);
-	    break;
-	}
-	default: {
-	    // ?  TBD How to "better" handle "object representation" of
-	    // noncomplex types
-	}
-	}
-	if(subdoc_data != 0) {
-	    bson_t b2; // on stack
-	    bson_init_static(&b2, subdoc_data, subdoc_len);
-
-	    size_t blen;
-	    char* jsons = bson_array_as_json(&b2, &blen); // Phew!!
-
-	    // Well HELLO there!
-	    Jsonb *targetjsonbvar =
-		DatumGetJsonbP(DirectFunctionCall1(jsonb_in, CStringGetDatum(jsons)));
-	    bson_free(jsons); // per bson.h
-	    
-	    PG_FREE_IF_COPY(aa,0);
-
-	    PG_RETURN_POINTER(targetjsonbvar);	    
-	}
+	// Well ...  HELLO there!
+	Jsonb *jsonb =
+	    DatumGetJsonbP(DirectFunctionCall1(jsonb_in, CStringGetDatum(jsons)));
+	bson_free(jsons); // per bson.h
+	
+	PG_FREE_IF_COPY(aa,0);
+	
+	PG_RETURN_POINTER(jsonb);
     }
     
     PG_FREE_IF_COPY(aa,0);
