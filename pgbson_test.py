@@ -390,7 +390,8 @@ def cast_corrupt_bson():
 
     return msg
 
-    
+
+
 def ejson_builtin_test1():
     msg = None
     
@@ -398,38 +399,74 @@ def ejson_builtin_test1():
 
     #  Fancy!  This will take payments array, add a new payment, delete
     #  the oldest (first) one, and update the record!
+    #
+    #  Notes:
+    #  1.  In SQL, update can only update a whole column so e.g.
+    #          update bsontest set bdata->data->payments[3] ...
+    #      is NOT possible.  So....
+    #  2.  We use jsonb_set() to touch only the {data,payments} path. This
+    #      allows all other material in bdata to NOT be dropped/overwritten
+    #  3.  We append a new EJSON payment object with the || operator
+    #  4.  Then we use the minus operator '- 0' to remove the zeroeth element
+    #
 
     new_pmt = '{"amt": {"$numberDecimal": "888"}, "date": {"$date": "2023-11-11T12:00:00Z"}}'
 
-    #  Notes:
-    #  1.  We use jsonb_set() to touch only the {data,payments} path
-    #  2.  We append a new EJSON payment object with the || operator
-    #  3.  We use -0 to remove the zeroeth element
     sql = """
 update bsontest set bdata = jsonb_set(bdata::jsonb, '{data,payments}', ((((bdata->'data')::jsonb)->'payments' || '%s') - 0))::bson
     """ % new_pmt
 
     curs.execute(sql);
     conn.commit()
-    
-    sql = """
+
+    def _chk(sql,exp,blurb):
+        msg = None
+
+        got = fetchRow1Col(sql)  # OK to be None
+        
+        #  type check to avoid implicit casts...
+        if got.__class__ != exp.__class__:
+            msg = "%s type mismatch; expected [%s], got [%s]" % (blurb,exp.__class__,got.__class__)
+        else:
+            if got != exp:
+                msg = "%s data mismatch; expected [%s], got [%s]" % (blurb,exp,got)        
+        return msg
+            
+    def _f1():
+        sql = """
 select (bdata->'data'->'payments'->'0'->>'amt')::numeric from bsontest;
     """
-    item = fetchRow1Col(sql)  # OK to be None
+        #  Careful:  Pulling casted numerics from postgres yields Decimal
+        #  in psycopg, NOT bson.decimal128; this is OK.
+        return _chk(sql, Decimal("98.23"), "new first payment date")        
 
-    #  Careful:  Pulling casted numerics from postgres yields Decimal
-    #  in psycopg, NOT bson.decimal128; this is OK.
-    exp = "98.23"
-    if item != Decimal(exp):
-        msg = "expected new first payment to be [%s], got [%s]" % (exp,item)
 
-    else:
+    def _f2():
+        #  Go for it again using function; note we can use >=0 index into
+        #  array here thanks to dotpaths and we get a native numeric as a
+        #  return type; no casting:
+        sql = """
+select bson_get_decimal128(bdata,'data.payments.0.amt') from bsontest;
+    """
+        return _chk(sql, Decimal("98.23"), "new first payment date")
+
+
+    def _f4():
+        sql = """
+select bson_get_datetime(bdata,'data.payments.4.date') from bsontest;
+    """
+        return _chk(sql, makeDatetime(2023,11,11,12,0,0,0), "last payment date")
+
+    def _f3():
         sql = """
 select jsonb_array_length(((bdata->'data')::jsonb)->'payments') from bsontest
         """
-        item = fetchRow1Col(sql)  # OK to be None
-        if item != 5:
-            msg = "expected payment array length to remain 5, got [%s]" % item
+        return _chk(sql, 5, "array length")
+
+    for f in [_f1,_f2,_f3,_f4]:
+        msg = f()
+        if msg != None:
+            break
         
     return msg
 
