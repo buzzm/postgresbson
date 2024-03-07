@@ -258,17 +258,19 @@ def jsonb_test():
     # Attempt 1:  Fetch with no cast:
     j2 = fetchRow1Col('SELECT jbdata FROM bsontest' )
 
-    # psycopg2 will by default turn jsonb into a dict...
-    #print(j2.__class__,":",j2)
-    # ... and turning that into a JSON string...
+    #
+    # psycopg2 will by default turn jsonb into a dict.  That is actually
+    # a neat trick and in many (most?) cases highly desirable and convenient.
+    # But here we want the raw JSON back, so our first attempt is to
+    # turn the dict in a JSON string...
     s2 = json.dumps(j2)
-    # ... of course yields a DIFFERENT hash:
+    # ... which of course yields a DIFFERENT hash:
     h3 = hashlib.sha256(bytes(s2,'utf-8')).hexdigest()
     #print("incoming hash:", h3)
     #print("hashes the same?", h2 == h3)
 
 
-    # Attempt 1:  Fetch casting to string, which will return JSON directly:
+    # Attempt 2:  Fetch casting to string, which will return JSON directly:
     s2 = fetchRow1Col('SELECT jbdata::text FROM bsontest' )
     #print(s2.__class__,":",s2)
     # ... but of course, same problem:
@@ -276,6 +278,8 @@ def jsonb_test():
     #print("incoming hash:", h3)
     #print("hashes the same?", h2 == h3)    
 
+    #  Bottom line:  you cannot roundtrip jsonb in a cryptoassured manner.
+    
     msg = None
     if(h2 != h3):
         msg = "roundtrip of hashes not the same"
@@ -355,7 +359,7 @@ def cast_short_bson():
     #  BSON must be minimum 5 bytes (4 bytes of length followed by trailing NULL
     #  byte).   This is a good way to quickly catch clearly malformed data:
     try:
-        bb = bytes('Z', 'utf-8')
+        bb = bytes('Z', 'utf-8')   # one byte, 'Z'
         curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (bb,))
         msg = "malformed BSON (short bytes) inserted OK"        
     except Exception as errmsg:

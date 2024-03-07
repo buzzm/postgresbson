@@ -412,13 +412,6 @@ Example
 Building
 ========
 
-Tested on
-
- * PG 14.4: OS X 10.15.7, OS X 13.2 Ventura, and RHEL 8.6.
- * PG 15.5.3: OS X 13.2 Ventura, RHEL 9.3
- * PG 16.1.3: OS X 13.2 Ventura, RHEL 9.3
-
-
 Requires:
 
  *  postgres development SDK (mostly for `.h` files in `.../postgresql/server`).
@@ -473,6 +466,17 @@ pick up the new BSON extension.
 
 Testing
 ========
+
+Tested on
+
+ * PG 16.1.3:
+   * OS X 14.3.1 Sonoma; Apple clang version 15.0.0 (clang-1500.1.0.2.5)
+   * OS X 13.2 Ventura
+   * RHEL 9.3
+ * PG 15.5.3: OS X 13.2 Ventura, RHEL 9.3
+ * PG 14.4: OS X 10.15.7, OS X 13.2 Ventura, and RHEL 8.6.
+
+
 
 ```
 # Make sure postgresql16-devel (or 14 or 15) is installed *first*. 
