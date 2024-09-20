@@ -13,10 +13,18 @@ querying.
 BSON (http://bsonspec.org/) is a high-performance, richly-typed data carrier
 similar to JSON but offers a number of attractive features including:
 
- *  Datetimes, decimal (numeric), and byte[] are first class types.  In pure
-    JSON these must all be represented as a string, requiring conversion,
-    potentially introducing lossiness, and impairing native operations
-    like `>` and `<=`.
+ *  Datetime is a first class type.  In pure
+    JSON these must all be represented as a string (typically ISO 8601),
+    requiring conversion, potentially introducing lossiness, and impairing
+    native operations like `>` and `<=`.
+ *  Numeric values are unambiguously carried in 4 first class types:
+    int32, int64, float, and decimal.
+    Unlike JSON there is no risk of inadvertently emitting a float of
+    1.0 as 1 and having it be parsed by a consumer as an integer.
+    A `decimal` value of 10.09 is preserved *exactly* as 10.09 with no risk of
+    floating point precision error e.g. `10.08999999999`
+ *  `byte[]` is a first class type.  This relieves the program of dealing
+    with base64 or other encodings of binary data to stringify it for JSON.
  *  Performance.  Moving binary BSON in and out of the database under some
     conditions is almost 10x faster than using native `jsonb` or `json` because
     it avoids to- and from-string and to-dictionary conversion.
