@@ -170,7 +170,10 @@ Datum bson_out(PG_FUNCTION_ARGS)
 {
     bytea* aa = BSON_GETARG_BSON(0);
 
+    size_t blen;
     bson_t b; // on stack
+    char* jsons;
+    
     BSON_STATIC_INIT(&b, aa);
 
 #ifdef PGBSON_DEBUG
@@ -179,8 +182,7 @@ Datum bson_out(PG_FUNCTION_ARGS)
     
     //char* jsons = bson_as_json(&b, &blen); 
     // Use relaxed because it makes date handling in SQL MUCH easier...
-    size_t blen;
-    char* jsons = bson_as_relaxed_extended_json(&b, &blen);
+    jsons = bson_as_relaxed_extended_json(&b, &blen);
 
     PG_FREE_IF_COPY(aa,0); // no need for ptr into &b anymore; char* jsons is
 			   // alloc'd and stands on its own...
@@ -219,12 +221,13 @@ Datum bson_send(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(bson_recv);
 Datum bson_recv(PG_FUNCTION_ARGS)
 {   
+    bytea* aa;
     StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
 
     bson_t b; // on stack
     bson_init_static(&b, (const uint8_t*) buf, buf->len);
     
-    bytea* aa = mk_palloc_bytea(&b);
+    aa = mk_palloc_bytea(&b);
 	
     PG_RETURN_BYTEA_P(aa);
 }
@@ -239,6 +242,11 @@ Datum bson_recv(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(pgbson_validate);
 Datum pgbson_validate(PG_FUNCTION_ARGS)
 {
+    bool rc;
+    bson_error_t error; // on stack
+    bson_validate_flags_t flags;
+    bytea* bbb;
+
 #ifdef PGBSON_DEBUG
     (void) fprintf(stderr, "bson_validate()\n");
 #endif
@@ -254,7 +262,7 @@ Datum pgbson_validate(PG_FUNCTION_ARGS)
 	    );
     }
     
-    bool rc = bson_init_static(&b, BSON_VARDATA_ANY(aa), VARSIZE_ANY_EXHDR(aa));
+    rc = bson_init_static(&b, BSON_VARDATA_ANY(aa), VARSIZE_ANY_EXHDR(aa));
 
     if(!rc) {
 	ereport(
@@ -263,8 +271,6 @@ Datum pgbson_validate(PG_FUNCTION_ARGS)
 	    );
     }
 	
-    bson_error_t error; // on stack
-
     /*  No need for special checks for mongodb...
     bson_validate_flags_t flags = BSON_VALIDATE_UTF8
 	| BSON_VALIDATE_DOLLAR_KEYS
@@ -273,7 +279,7 @@ Datum pgbson_validate(PG_FUNCTION_ARGS)
 	| BSON_VALIDATE_EMPTY_KEYS;
     */
     
-    bson_validate_flags_t flags = 0; // just walk the structure...
+    flags = 0; // No special flags; just walk the structure...    
     rc = bson_validate_with_error(&b, flags, &error);
     
     if(!rc) {
@@ -286,7 +292,7 @@ Datum pgbson_validate(PG_FUNCTION_ARGS)
     }
     
     // OK!
-    bytea* bbb = mk_palloc_bytea(&b);
+    bbb = mk_palloc_bytea(&b);    
 
     PG_FREE_IF_COPY(aa,0);
     
@@ -306,11 +312,13 @@ Datum pgbson_compare(PG_FUNCTION_ARGS)
     bytea* second = BSON_GETARG_BSON(1);
 
     bson_t b1; // on stack
-    bson_init_static(&b1, BSON_VARDATA_ANY(first), VARSIZE_ANY_EXHDR(first));
     bson_t b2; // on stack
+    int cmp;
+    
+    bson_init_static(&b1, BSON_VARDATA_ANY(first), VARSIZE_ANY_EXHDR(first));
     bson_init_static(&b2, BSON_VARDATA_ANY(second), VARSIZE_ANY_EXHDR(second));
 
-    int cmp = bson_compare(&b1, &b2);
+    cmp = bson_compare(&b1, &b2);
 
     PG_FREE_IF_COPY(first,0);
     PG_FREE_IF_COPY(second,1);
@@ -327,11 +335,13 @@ Datum bson_binary_equal(PG_FUNCTION_ARGS)
     bytea* second = BSON_GETARG_BSON(1);
 
     bson_t b1; // on stack
-    bson_init_static(&b1, BSON_VARDATA_ANY(first), VARSIZE_ANY_EXHDR(first));
     bson_t b2; // on stack
+    bool cmp;
+    
+    bson_init_static(&b1, BSON_VARDATA_ANY(first), VARSIZE_ANY_EXHDR(first));
     bson_init_static(&b2, BSON_VARDATA_ANY(second), VARSIZE_ANY_EXHDR(second));
     
-    bool cmp = bson_equal(&b1, &b2);
+    cmp = bson_equal(&b1, &b2);
  
     PG_FREE_IF_COPY(first,0);
     PG_FREE_IF_COPY(second,1);
@@ -422,14 +432,15 @@ Datum bson_get_string(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
+    bson_iter_t target;    
     bson_t b; // on stack
+    bool rc;
+    text* txt = 0;
+    
     BSON_STATIC_INIT(&b,aa);
     
-    bson_iter_t target;
-    bool rc = false;
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_UTF8);
 
-    text* txt = 0;
     if(rc) {
 	uint32_t len;
 	// bson_iter_utf8() returns a pointer that MUST NOT be
@@ -478,12 +489,12 @@ Datum bson_get_datetime(PG_FUNCTION_ARGS)
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
-    BSON_STATIC_INIT(&b,aa);
-
     Timestamp ts;
-
     bson_iter_t target;
     bool rc = false;
+    
+    BSON_STATIC_INIT(&b,aa);
+
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_DATE_TIME);
     if(rc) {
 	int64_t millis_since_epoch = bson_iter_date_time (&target);
@@ -504,14 +515,13 @@ Datum bson_get_decimal128(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
+    bson_iter_t target;
+    bool rc = false;
+    Numeric nm;
+    
     bson_t b; // on stack
     BSON_STATIC_INIT(&b,aa);
 
-    bson_iter_t target;
-    bool rc = false;
-
-    Numeric nm;
-							     
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_DECIMAL128);
     if(rc) {
 	bson_decimal128_t val;
@@ -546,6 +556,9 @@ static bool _get_obj_or_arr(bson_t* parent, text* dotpath, bson_t* child)
     bson_iter_t iter;
     bson_iter_t target;
 
+    char* c_dotpath;
+    bool rc;
+    
     if(!bson_iter_init (&iter, parent)) {
 	ereport(
 	    ERROR,
@@ -553,8 +566,8 @@ static bool _get_obj_or_arr(bson_t* parent, text* dotpath, bson_t* child)
 	    );
     }
 
-    char* c_dotpath = text_to_cstring(dotpath);
-    bool rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
+    c_dotpath = text_to_cstring(dotpath);
+    rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
     pfree(c_dotpath); // dotpath no longer needed
     
     if(rc) {
@@ -592,10 +605,12 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
+    bson_t b2; // on stack
+    bool rc;
+    
     BSON_STATIC_INIT(&b,aa);
 
-    bson_t b2; // on stack    
-    bool rc = _get_obj_or_arr(&b, dotpath, &b2);
+    rc = _get_obj_or_arr(&b, dotpath, &b2);
     
     if(rc) {
 	bytea* bbb = mk_palloc_bytea(&b2); // alloc a *new* bytea to hold b2
@@ -615,10 +630,12 @@ Datum bson_get_jsonb_array(PG_FUNCTION_ARGS)
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
     bson_t b; // on stack
+    bson_t b2; // on stack
+    bool rc;
+    
     BSON_STATIC_INIT(&b,aa);
 
-    bson_t b2; // on stack    
-    bool rc = _get_obj_or_arr(&b, dotpath, &b2);
+    rc = _get_obj_or_arr(&b, dotpath, &b2);
 
     if(rc) {
 	size_t blen;
@@ -647,12 +664,13 @@ Datum bson_get_double(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
-    bson_t b; // on stack
-    BSON_STATIC_INIT(&b,aa);
-
     bson_iter_t target;
     bool rc = false;
     double dbl = 0;  // doesnt matter
+    bson_t b; // on stack
+    
+    BSON_STATIC_INIT(&b,aa);
+
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_DOUBLE);
     if(rc) {
 	dbl = bson_iter_double(&target);
@@ -669,12 +687,13 @@ Datum bson_get_int32(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
-    bson_t b; // on stack
-    BSON_STATIC_INIT(&b,aa);
-
     bson_iter_t target;
     bool rc = false;
     int32_t val = 0; // doesnt matter
+    
+    bson_t b; // on stack
+    BSON_STATIC_INIT(&b,aa);
+
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_INT32);
     if(rc) {
 	val = bson_iter_int32(&target);
@@ -692,13 +711,13 @@ Datum bson_get_boolean(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
+    bson_iter_t target; 
+    bool rc = false;
+    bool val = false; // doesnt matter
+    
     bson_t b; // on stack
     BSON_STATIC_INIT(&b,aa);
     
-    bson_iter_t target; 
-    bool rc = false;
-    
-    bool val = false; // doesnt matter
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_BOOL);
     if(rc) {
 	val = bson_iter_bool(&target);
@@ -716,13 +735,12 @@ Datum bson_get_int64(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
-    bson_t b; // on stack
-    BSON_STATIC_INIT(&b,aa);
-    
     bson_iter_t target; 
     bool rc = false;
-    
     int64_t val = 0; // doesnt matter
+    
+    bson_t b; // on stack
+    BSON_STATIC_INIT(&b,aa);
     
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_INT64);
     if(rc) {
@@ -741,22 +759,24 @@ Datum bson_get_binary(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
+    bson_iter_t target;    
     bson_t b; // on stack
     BSON_STATIC_INIT(&b,aa);
 
-    bson_iter_t target;
     if(_get_bson_iter(&b, dotpath, &target, BSON_TYPE_BINARY)) {
 	bson_subtype_t subtype;
 	uint32_t len;
 	const uint8_t* data;
-    
-	bson_iter_binary (&target, &subtype, &len, &data);
-
-	// What to do with subtype?
+	int tot_size;
+	bytea* aa2;
 	
-	int tot_size = len + VARHDRSZ; // MUST add varlena hdr!
+	bson_iter_binary (&target, &subtype, &len, &data);
+	// What to do with subtype?  Is there a way to return subtype along
+	// with the main payload data...?
+	
+	tot_size = len + VARHDRSZ; // MUST add varlena hdr!
     
-	bytea* aa2 = (bytea*) palloc(tot_size);
+	aa2 = (bytea*) palloc(tot_size);
 	SET_VARSIZE(aa2, tot_size);
 
 	memcpy((void *) VARDATA(aa2), (void *) data, len); // VARDATA_ANY...?
@@ -781,16 +801,15 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
     bytea* aa = BSON_GETARG_BSON(0);
     text* dotpath = PG_GETARG_TEXT_PP(1);
 
-    bson_t b; // on stack
-    bson_init_static(&b, BSON_VARDATA_ANY(aa), VARSIZE_ANY_EXHDR(aa));
-
     bson_iter_t iter;
     bson_iter_t target;
-
     const char* txt = 0;
     char valbuf[64]; // good for numbers and dates
     bool must_free = false;
 		
+    bson_t b; // on stack
+    bson_init_static(&b, BSON_VARDATA_ANY(aa), VARSIZE_ANY_EXHDR(aa));
+
     if (!bson_iter_init (&iter, &b)) {
 	ereport(
 	    ERROR,
@@ -850,6 +869,8 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 	    case BSON_TYPE_ARRAY: {		
 		uint32_t subdoc_len;
 		const uint8_t* subdoc_data;
+		bson_t b; // on stack
+		size_t blen;
 
 		if(ft == BSON_TYPE_DOCUMENT) {
 		    bson_iter_document(&target, &subdoc_len, &subdoc_data);
@@ -857,10 +878,8 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 		    bson_iter_array(&target, &subdoc_len, &subdoc_data);
 		}
 
-		bson_t b; // on stack
 		bson_init_static(&b, subdoc_data, subdoc_len);
 
-		size_t blen;
 		txt = bson_as_relaxed_extended_json(&b, &blen);
 		must_free = true;
 		break;
@@ -870,17 +889,19 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 		bson_subtype_t subtype;
 		uint32_t len;
 		const uint8_t* data;
-    
+		char* tmpp;
+		int idx;
+		
 		// What to do with subtype?  Dunno!
 		bson_iter_binary (&target, &subtype, &len, &data);
 
 		// Output is "\x54252031..."  So 2 bytes for "\x",
 		// then 2 slots to hold hex rep for each byte, plus 1 for NULL:
-		char* tmpp = (char*)bson_malloc (2 + (len*2) + 1);
+		tmpp = (char*)bson_malloc (2 + (len*2) + 1);
 
 		tmpp[0] = '\\';
 		tmpp[1] = 'x';
-		int idx = 2;
+		idx = 2;  // start at 2, not 0, to jump over \x already in tmpp!
 		for(int n = 0; n < len; n++) {
 		    // Love that pointer math....
 		    sprintf(tmpp+idx, "%02x", (uint8_t)data[n]);

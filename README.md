@@ -477,6 +477,9 @@ Testing
 
 Tested on
 
+ * PG 18.2:
+   * OS X 26.3 Tahoe; Apple clang version 17.0.0 (clang-1700.6.3.2)
+   
  * PG 16.3:
    * OS X 14.3.1 Sonoma; Apple clang version 15.0.0 (clang-1500.1.0.2.5)
    * RHEL 9.3
