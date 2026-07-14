@@ -253,7 +253,7 @@ There are three ways to deal with this:
 Status
 ======
 
-Experimental.  All contribs / PRs / comments / issues welcome.
+Working and mature.  All contribs / PRs / comments / issues welcome.
 
 
 Example
@@ -302,8 +302,13 @@ Example
     }
 
     # raw_bson is byte[].  BSON is castable to/from bytea type in PG.
-    # See pgbson--2.0.sql about byte[] validation to ensure that the bytea
-    # being stored is real BSON not malformed junk.  Note that null handling is
+    #
+    # See pgbson--2.0.sql about byte[] validation with a write operation that
+    # results in a cast from bytea to the bson type to ensure that the bytea
+    # being stored is real BSON not malformed junk.  Once validated upon write,
+    # the bson bytes are assumed to be valid upon read.
+    #
+    # Note that null handling is
     # the same as for regular types and the to/from JSON and validation machinery
     # is NOT invoked.  In other words:
     #
@@ -539,13 +544,14 @@ Operators and comparison:
 TO DO
 ========
  1.  **Significantly** tidy up test driver
+ 
  2.  Need something better when extracting arrays.
+ 
  3.  Need something better when bson_get_bson() resolves to a scalar because
      simple scalars like a string are not BSON.  Currently, it just returns NULL
      which is "technically correct" but unsatisfying
- 4.  Need additional safety checks when doing BSON compare and other operations
-     because corrupted BSON has a tendency to segfault the PG process.
- 5.  Need more docs or a more clever solution for when calling `bson_get_{type}`
+     
+ 4.  Need more docs or a more clever solution for when calling `bson_get_{type}`
      points to a field that exists but the type is wrong.  Currently it just
      returns null because that is "safest."   
 
