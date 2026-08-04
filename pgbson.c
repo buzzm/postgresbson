@@ -829,10 +829,17 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 		break;
 	    }
 	    case BSON_TYPE_DOUBLE: {
+		// Do NOT sprintf("%lf") into valbuf.  "%lf" is *fixed*
+		// notation so the length scales with the exponent; 1e308
+		// renders as 316 chars and blows the 64 byte stack buffer.
+		// float8out is bounded, gives the shortest round-trip form
+		// (3.1415, not "3.141500"), handles inf/nan, and matches how
+		// postgres renders every other float8.  Result is palloc'd,
+		// so it is NOT must_free (that path calls bson_free).
 		double v = bson_iter_double(&target);
-		sprintf(valbuf, "%lf", v);
-		txt = valbuf;
-		break;		
+		txt = DatumGetCString(DirectFunctionCall1(float8out,
+							 Float8GetDatum(v)));
+		break;
 	    }
 	    case BSON_TYPE_INT32: {
 		int32_t v = bson_iter_int32(&target);
@@ -858,12 +865,36 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 		int64_t millis_since_epoch = bson_iter_date_time (&target);
 		bson_string_t* str = bson_string_new (NULL);
 		_bson_iso8601_date_format(millis_since_epoch, str);
-		bson_strncpy (valbuf, str->str, str->len);
-		valbuf[str->len] = '\0';
+		// The size arg to bson_strncpy is the size of the DESTINATION,
+		// not the source: it copies at most size-1 bytes and always
+		// NUL terminates at dst[size-1].  Passing str->len therefore
+		// chopped the last character (the trailing "Z" of the ISO8601
+		// date) and the manual NUL below wrote one byte past that.
+		// sizeof(valbuf) is both correct and bounded.
+		bson_strncpy (valbuf, str->str, sizeof(valbuf));
 		bson_string_free(str, true); // true means "free segment" ?
 		txt = valbuf;
-		break;		
-	    }								
+		break;
+	    }
+
+	    case BSON_TYPE_BOOL: {
+		// "true"/"false" to match what jsonb's ->> yields, not the
+		// "t"/"f" of postgres' own boolean type.  Both cast back to
+		// boolean happily.  String literal, so no must_free; mk_text
+		// copies it below.
+		txt = bson_iter_bool(&target) ? "true" : "false";
+		break;
+	    }
+
+	    case BSON_TYPE_OID: {
+		// The bare 24 char hex, NOT the {"$oid": ...} EJSON wrapper,
+		// consistent with how the other scalars here render (decimal128
+		// and date do not carry their $-wrappers either).
+		// bson_oid_to_string wants char[25]; valbuf is well clear.
+		bson_oid_to_string(bson_iter_oid(&target), valbuf);
+		txt = valbuf;
+		break;
+	    }
 
 	    case BSON_TYPE_DOCUMENT: 
 	    case BSON_TYPE_ARRAY: {		

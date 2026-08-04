@@ -256,6 +256,72 @@ Status
 Working and mature.  All contribs / PRs / comments / issues welcome.
 
 
+Release notes
+=============
+
+Unreleased
+----------
+
+Four fixes to `bson_as_text()`, i.e. the `->>` operator.
+
+**None of these touch the `bson_get_{type}()` dotpath accessors.**  In
+particular `bson_get_datetime()`, `bson_get_double()`, and `bson_get_boolean()`
+go through an entirely separate code path and have always been correct.  If you
+use the dotpath accessors exclusively, nothing below affects you.
+
+**BREAKING: `->>` on a datetime now emits the trailing `Z`.**
+
+    -- before:  2022-06-06T12:13:14.500
+    -- after:   2022-06-06T12:13:14.500Z
+
+> ### `bson_get_datetime()` was NOT affected.  It always worked.
+>
+> This bug lived only in the `->>` operator.  `bson_get_datetime()` hands back
+> a real `timestamp` through a completely separate code path and has been
+> correct the entire time -- no truncation, no time zone shift, nothing to
+> recompute.  If you took the README's advice and used the dotpath accessors
+> for dates, you are not affected by any of this and can stop reading here.
+>
+> This is, incidentally, a decent argument for the dotpath accessors over the
+> arrow operators generally: they are faster, they preserve type, and they
+> hand you a `timestamp` instead of a string you have to cast.
+
+The `Z` was being chopped because the copy into the output buffer was handed
+the length of the source string rather than the size of the destination.
+Check your code before upgrading, because there are two ways this bites:
+
+ 1.  If you appended the `Z` yourself to work around this, you will now get
+     `...500ZZ`.  Remove the workaround.
+ 2.  Worse and quieter: if you cast the result to `timestamptz`, postgres was
+     reading a `Z`-less string as *local* time.  With the `Z` present it is
+     now correctly read as UTC, so previously-computed values shift by your
+     server's UTC offset.  Any stored results of datetime math on `->>` dates
+     are suspect and should be recomputed.
+
+Casting to plain `timestamp` (no time zone) is unaffected either way.
+
+**`->>` on a double no longer overflows, or rounds.**  The double was rendered
+with `sprintf("%lf")` into a 64 byte stack buffer.  `%lf` is *fixed* notation,
+so the length tracks the exponent: a value like `1e308` rendered to 316
+characters and smashed the stack, taking the backend down with it.  It also
+silently rounded everything to 6 decimal places.  Doubles now render exactly
+as postgres renders any `float8`, so `3.1415926` comes back as `3.1415926`
+rather than `3.141593`, and `2.0` as `2` rather than `2.000000`.
+
+**`->>` on a boolean returns `true`/`false` instead of NULL.**  Spelled the
+same way `jsonb`'s `->>` spells it, not postgres' own `t`/`f`.  Both cast back
+to `boolean` cleanly.
+
+**`->>` on an ObjectId returns the bare 24 character hex instead of NULL**,
+with no `{"$oid": ...}` wrapper, consistent with how datetime and decimal128
+also drop their EJSON `$`-wrappers here.  There is deliberately no
+`bson_get_objectid()`; there is no high fidelity postgres type for it to land
+in.  Cast the column to `jsonb` if you want the wrapped form.
+
+Following a path that does not exist still yields NULL, as does a path
+resolving to an explicit BSON null.  That is unchanged.
+
+
 Example
 =======
 

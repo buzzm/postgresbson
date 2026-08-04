@@ -210,6 +210,64 @@ def check1(args):
     return msg
 
 
+#  Regression test for a stack buffer overflow in bson_as_text().
+#  The old code did sprintf(valbuf, "%lf", v) into a char[64].  "%lf" is
+#  *fixed* notation, so the rendered length tracks the exponent: 1e308 comes
+#  out as 316 characters and smashed the stack, taking the backend with it.
+#  As a bonus it rounded everything to 6 decimal places.
+#  Note these all go through ->> i.e. bson_as_text(), which is a completely
+#  different code path than bson_get_double().
+def double_as_text():
+    doc = {
+        "big":    1e308,                   # the one that used to crash
+        "neg":   -1.7976931348623157e308,  # -DBL_MAX
+        "small":  3.1415926,               # used to come back "3.141593"
+        "whole":  2.0                      # used to come back "2.000000"
+    }
+    insertBson(doc)
+
+    for fld, expected in [
+            ("big",   "1e+308"),
+            ("neg",   "-1.7976931348623157e+308"),
+            ("small", "3.1415926"),
+            ("whole", "2")
+    ]:
+        item = fetchRow1Col("SELECT bdata->>'%s' FROM bsontest" % fld)
+        if item != expected:
+            return "%s: got %s, expected %s" % (fld, item, expected)
+
+    return None
+
+
+#  bool and ObjectId used to fall off the end of the switch in bson_as_text()
+#  and come back NULL, even though bson_get_boolean() handled bool just fine.
+#  bool renders "true"/"false" to match jsonb's ->>, not postgres' own "t"/"f".
+#  ObjectId renders as the bare 24 char hex, no {"$oid": ...} wrapper -- same
+#  as decimal128 and datetime, which also drop their $-wrappers here.
+#  There is deliberately no bson_get_objectid(); it has no high fidelity
+#  postgres type to land in.
+def bool_oid_as_text():
+    an_oid = "64b7f0c2a1b2c3d4e5f60718"
+
+    doc = {
+        "yes": True,
+        "no":  False,
+        "oid": bson.ObjectId(an_oid)
+    }
+    insertBson(doc)
+
+    for fld, expected in [
+            ("yes", "true"),
+            ("no",  "false"),
+            ("oid", an_oid)
+    ]:
+        item = fetchRow1Col("SELECT bdata->>'%s' FROM bsontest" % fld)
+        if item != expected:
+            return "%s: got %s, expected %s" % (fld, item, expected)
+
+    return None
+
+
 def toast_test():
     """Put a big obj in there.  Look at 
 https://hakibenita.com/sql-medium-text-performance to get an idea of how
@@ -671,6 +729,8 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':basic_roundtrip, 'desc':"roundtrip BIG structure", "args":[sdata]}    
         ,{'-':toast_test }
         ,{'-':bson_test }
+        ,{'-':double_as_text}
+        ,{'-':bool_oid_as_text}
         ,{'-':basic_internal_update}
 
         ,{'-':check1, 'desc':"string exists",
@@ -683,6 +743,25 @@ use case; bson "on its own" in and out of postgres is not very interesting.
           "args": ["SELECT bson_get_decimal128(bdata, 'data.amt') FROM bsontest", a_decimal ] }
         ,{'-':check1, 'desc':"datetime exists",
           "args": ["SELECT bson_get_datetime(bdata, 'data.txDate') FROM bsontest", a_datetime ] }
+
+        #  ->> is bson_as_text(), a different code path than bson_get_datetime()
+        #  above.  The trailing "Z" used to get chopped: bson_strncpy() takes
+        #  the size of the DESTINATION, but was being handed the length of the
+        #  source.  a_datetime is 6-Jun-2022 12:13:14.500 UTC.
+        ,{'-':check1, 'desc':"datetime as text keeps trailing Z",
+          "args": ["SELECT bdata->'data'->>'txDate' FROM bsontest",
+                   "2022-06-06T12:13:14.500Z" ] }
+
+        #  Likewise ->> on a double.  Used to come back "3.141593" because
+        #  "%lf" rounds to 6 decimal places.  See double_as_text().
+        ,{'-':check1, 'desc':"double as text keeps precision",
+          "args": ["SELECT bdata->'data'->'userPrefs'->'1'->'u'->>'pi' FROM bsontest",
+                   "3.1415926" ] }
+
+        #  sdata has carried header.active all along; ->> just never asked
+        #  for it, so the bool returning NULL went unnoticed.
+        ,{'-':check1, 'desc':"boolean as text",
+          "args": ["SELECT bdata->'header'->>'active' FROM bsontest", "true" ] }
 
         ,{'-':binary_checks}  # should be broken up....
 
