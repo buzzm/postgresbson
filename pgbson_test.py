@@ -268,6 +268,61 @@ def bool_oid_as_text():
     return None
 
 
+#  Regression test for a backend segfault in _get_obj_or_arr().
+#  BSON cannot be built from a bare scalar (see README "Arrays, BSON, and
+#  JSON"), so -> on a scalar has nothing to return and must yield NULL.
+#  The old code returned the result of bson_iter_find_descendant -- i.e.
+#  "was the path found", NOT "was it a document/array" -- so a found scalar
+#  reported success while leaving the child bson_t completely uninitialized.
+#  bson_get_bson() then handed that garbage stack struct to mk_palloc_bytea(),
+#  which read b->len out of it: SIGSEGV, and a segfaulting backend takes the
+#  whole postmaster down with it.  bson_get_jsonb_array() had it identically.
+#  Every BSON scalar type is exercised because the bug was type-independent;
+#  only reaching the switch's default: branch mattered.
+def scalar_arrow_returns_null():
+    insertBson(sdata)
+
+    scalar_paths = [
+        "header.type",                        # utf8
+        "header.active",                      # bool
+        "header.ts",                          # datetime
+        "data.amt",                           # decimal128
+        "data.userPrefs.1.u.atomsInPlanet",   # int64
+        "data.userPrefs.1.u.pi",              # double
+        "data.userPrefs.1.u.listOfPrimes.0",  # int32
+        "data.userPrefs.0.u.thumbnail"        # binary -- the original repro
+    ]
+
+    for path in scalar_paths:
+        #  Both spellings of the same call: the -> operator and the function
+        #  it binds to.
+        for sql in [
+                "SELECT bdata->'%s' FROM bsontest" % path,
+                "SELECT bson_get_bson(bdata,'%s') FROM bsontest" % path,
+                "SELECT bson_get_jsonb_array(bdata,'%s') FROM bsontest" % path
+        ]:
+            item = fetchRow1Col(sql)
+            if item is not None:
+                return "%s: got %s, expected None" % (sql, item)
+
+    #  ... and make sure the fix did not break the cases that must still work.
+    #  ::bytea or psycopg2 hands back the bson_out text rendering as a str;
+    #  get_doc_from_bson() feeds that to bson.decode(), which needs bytes.
+    doc = get_doc_from_bson("SELECT (bdata->'data.sub1.sub2')::bytea FROM bsontest")
+    if doc != {"corn": "dog"}:
+        return "subdocument: got %s, expected {'corn': 'dog'}" % doc
+
+    arr = fetchRow1Col("SELECT bson_get_jsonb_array(bdata,'data.userPrefs.1.u.listOfPrimes') FROM bsontest")
+    if arr != [2, 3, 5, 7, 11, 13, 17, 19]:
+        return "array: got %s, expected the list of primes" % arr
+
+    #  A path that does not exist at all was always NULL; keep it that way.
+    if fetchRow1Col("SELECT bdata->'no.such.path' FROM bsontest") is not None:
+        return "missing path did not return None"
+
+    return None
+
+
 def toast_test():
     """Put a big obj in there.  Look at 
 https://hakibenita.com/sql-medium-text-performance to get an idea of how
@@ -731,6 +786,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':bson_test }
         ,{'-':double_as_text}
         ,{'-':bool_oid_as_text}
+        ,{'-':scalar_arrow_returns_null}
         ,{'-':basic_internal_update}
 
         ,{'-':check1, 'desc':"string exists",

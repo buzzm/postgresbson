@@ -585,12 +585,20 @@ static bool _get_obj_or_arr(bson_t* parent, text* dotpath, bson_t* child)
 	    break;
 	}
 	default: {
-	    // ?  TBD How to "better" handle "object representation" of
-	    // noncomplex types
+	    // A scalar has no "object representation"; BSON cannot be built
+	    // from anything but a key:value object.  Leave subdoc_data 0 so
+	    // the caller is told "no child" and returns NULL.
 	}
 	}
 	if(subdoc_data != 0) {
 	    bson_init_static(child, subdoc_data, subdoc_len);
+	} else {
+	    // Path was found but yielded no document/array (scalar, or a
+	    // failed bson_iter_document/array).  child was NEVER initialized,
+	    // so we must not report success: callers pass child straight to
+	    // mk_palloc_bytea()/bson_array_as_json(), and an uninitialized
+	    // stack bson_t there is a segfault.
+	    rc = false;
 	}
     }
     

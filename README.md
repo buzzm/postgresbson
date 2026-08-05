@@ -262,6 +262,22 @@ Release notes
 Unreleased
 ----------
 
+**Fixed: backend segfault in `bson_get_bson()` / the `->` operator when a
+dotpath resolved to a scalar.**  BSON cannot be built from a bare scalar, so
+there was nothing to return; the code detected "path found" but not "path found
+AND it is a document or array", and handed back an uninitialized structure.  A
+segfaulting backend takes the whole postmaster down with it, so any user with
+`SELECT` could bounce the server with an ordinary query:
+
+    -- any of these, where the dotpath ends on a string, int, bool,
+    -- datetime, decimal128, double or binary:
+    select bson_column->'d.recordId' from ...
+    select bson_get_bson(bson_column, 'd.recordId') from ...
+    select bson_get_jsonb_array(bson_column, 'd.recordId') from ...
+
+These now return NULL, which is what the TO DO section below has always
+claimed they did.  Read-path only; no stored data was ever at risk.
+
 Four fixes to `bson_as_text()`, i.e. the `->>` operator.
 
 **None of these touch the `bson_get_{type}()` dotpath accessors.**  In
