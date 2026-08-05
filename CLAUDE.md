@@ -179,19 +179,30 @@ restart" above.
 
 ## The three version numbers are independent — do not "fix" them
 
-`pgbson.control` (`default_version`), `META.json` (`"version"`), and the string returned by
-`pgbson_version()` in `pgbson.c` all version **three different things** that move at different
-rates: the postgres binding (i.e. the SQL install script and what `CREATE EXTENSION` sees), the
-distribution published to PGXN, and the C code itself. They are not expected to agree, and
-reconciling them is not a cleanup task.
+Three *independent* things get versioned here, and they are not expected to agree:
 
-**`pgbson.control` and `pgbson_version()` both currently read `2.1`. That is a coincidence, not a
-correspondence.** They arrived there independently and will drift apart again; do not treat their
-agreement as an invariant to preserve, and do not "restore" it if one moves.
+| Where | Versions | Moves when |
+| --- | --- | --- |
+| `pgbson.control` `default_version` | the postgres binding — the SQL install script and what `CREATE EXTENSION` sees | the SQL surface changes |
+| `META.json` top-level `"version"` | the distribution published to PGXN | you cut a PGXN release |
+| `pgbson_version()` in `pgbson.c` | the C code itself | you feel like it |
+
+Reconciling those three is not a cleanup task. As of this writing `default_version` and
+`pgbson_version()` both read `2.1` — **a coincidence, not a correspondence.** They arrived there
+independently and will drift apart again; do not treat the agreement as an invariant, and do not
+"restore" it when one moves.
+
+**One genuine correspondence, though — do not let the rule above talk you out of it.**
+`META.json`'s `provides.bson.version` is not the distribution version; per the PGXN meta spec it
+is the version of *the extension*, so it is supposed to equal `pgbson.control`'s `default_version`.
+Likewise `provides.bson.file` must name the current install script. Both must be updated when
+`default_version` moves. (Unrelated but noted: the `provides` key and distribution `name` are both
+`bson` while the extension is actually `pgbson` — a pre-existing mismatch, deliberately left alone.)
 
 `pgbson.control`'s `default_version` is the main switch: it decides what a bare `CREATE EXTENSION
 pgbson` installs. Bumping it is a four-file move — rename the install script to match the new
 version, add a `pgbson--<old>--<new>.sql` upgrade delta, list **all** the scripts in `DATA` in
-both `Makefile` and `MyMake.mk`, and point `META.json`'s `"file"` at the new install script.
+both `Makefile` and `MyMake.mk`, and update `META.json`'s `provides.bson.file` *and*
+`provides.bson.version` per the correspondence above.
 Old install scripts stay shipped rather than deleted, so `CREATE EXTENSION pgbson VERSION '2.0'`
 keeps working and `extension_upgrade_path()` in the test suite has something real to upgrade from.
