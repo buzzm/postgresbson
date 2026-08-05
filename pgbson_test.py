@@ -323,6 +323,83 @@ def scalar_arrow_returns_null():
     return None
 
 
+#  bson_get_value() is the general extractor: every BSON type, scalar or not,
+#  returned wrapped under the key "_".  The wrap is UNCONDITIONAL -- peel
+#  exactly one layer and you have the true value, with no ambiguity between
+#  "the scalar 5" and "a document that is {'_': 5}".
+def get_value_wraps_everything():
+    insertBson(sdata)
+
+    #  Not get_doc_from_bson(): it decodes unconditionally, so a SQL NULL
+    #  (missing path) would blow up in bson.decode() before we could test it.
+    def unwrap(path):
+        raw = fetchRow1Col(
+            "SELECT (bson_get_value(bdata,'%s'))::bytea FROM bsontest" % path)
+        if raw is None:
+            return None
+        if type(raw) is memoryview:
+            raw = bytes(raw)
+        doc = safe_bson_decode(raw)
+        if list(doc.keys()) != ["_"]:
+            raise Exception("%s: wrapper keys were %s, expected ['_']"
+                            % (path, list(doc.keys())))
+        return doc["_"]
+
+    #  Scalars: full type fidelity, which is exactly what ->> cannot give you.
+    for path, expected in [
+            ("header.type",                       "X"),
+            ("header.active",                     True),
+            ("data.recordId",                     "ID0"),
+            ("data.amt",                          makeDecimal128(a_decimal)),
+            ("data.userPrefs.1.u.atomsInPlanet",  283572834759209881),
+            ("data.userPrefs.1.u.pi",             3.1415926),
+            ("data.userPrefs.1.u.listOfPrimes.0", 2)
+    ]:
+        item = unwrap(path)
+        if item != expected:
+            return "%s: got %s::%s, expected %s::%s" % (
+                path, item, type(item), expected, type(expected))
+
+    #  Datetime and binary survive as real types, not stringifications.
+    if unwrap("header.ts") != makeDatetime(2022,5,5,12,13,14,456):
+        return "header.ts did not round trip as a datetime"
+
+    thumb = unwrap("data.userPrefs.0.u.thumbnail")
+    if thumb != bytes("Pretend this is a JPEG", 'utf-8'):
+        return "thumbnail did not round trip as binary: %s" % thumb
+
+    #  Documents wrap too -- the rule is uniform, not scalars-only.
+    if unwrap("data.sub1.sub2") != {"corn": "dog"}:
+        return "subdocument did not come back wrapped"
+
+    #  The payoff: inside the wrapper an array is a VALUE, so it decodes as a
+    #  real array rather than the string-indexed {"0":..,"1":..} form that
+    #  bson_get_bson() is forced into.  Compare the two here.
+    primes = unwrap("data.userPrefs.1.u.listOfPrimes")
+    if primes != [2,3,5,7,11,13,17,19]:
+        return "array did not come back as a real array: %s" % primes
+
+    forced = get_doc_from_bson(
+        "SELECT (bson_get_bson(bdata,'data.userPrefs.1.u.listOfPrimes'))::bytea FROM bsontest")
+    if forced != {"0":2,"1":3,"2":5,"3":7,"4":11,"5":13,"6":17,"7":19}:
+        return "bson_get_bson no longer returns the string-indexed form: %s" % forced
+
+    #  The ambiguity case that unconditional wrapping exists to prevent: a
+    #  document that genuinely IS {"_": ...} must survive distinguishably.
+    insertBson({"tricky": {"_": 5}, "plain": 5})
+    if unwrap("tricky") != {"_": 5}:
+        return "a stored {'_':5} document did not survive the wrap"
+    if unwrap("plain") != 5:
+        return "the scalar 5 did not survive the wrap"
+
+    #  Missing path is NULL, like every other accessor.
+    insertBson(sdata)
+    if unwrap("no.such.path") is not None:
+        return "missing path did not return None"
+
+    return None
+
+
 def toast_test():
     """Put a big obj in there.  Look at 
 https://hakibenita.com/sql-medium-text-performance to get an idea of how
@@ -787,6 +864,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':double_as_text}
         ,{'-':bool_oid_as_text}
         ,{'-':scalar_arrow_returns_null}
+        ,{'-':get_value_wraps_everything}
         ,{'-':basic_internal_update}
 
         ,{'-':check1, 'desc':"string exists",

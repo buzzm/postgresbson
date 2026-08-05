@@ -188,10 +188,25 @@ provides the `#>` operator and the corresponding `json_extract_path` and `jsonb_
 
 
 
-Arrays, BSON, and JSON
-----------------------
+Scalars, Arrays, BSON, and JSON
+------------------------------
 Unlike JSON, BSON can only be created from a key:value object (which can be
 empty); it cannot be created from a simple scalar or in particular an array.
+
+This single constraint produces two separate annoyances, and `bson_get_value`
+(approach #4 below) is the general answer to both.  The short version:
+
+    -- the value at the dotpath, whatever its type, wrapped under "_":
+    select bson_get_value(bson_column, 'd.payload.vector') from ...
+      returns  {"_": ["some value", "another value", {"fldx":"a rich shape"}]}
+
+    select bson_get_value(bson_column, 'd.recordId') from ...
+      returns  {"_": "R1"}
+
+Peel exactly one layer and you have the true value.  The rest of this section
+explains why the wrapper is there and what the alternatives are.
+
+**The array annoyance.**
 In the course of descending into substructure, it is of course possible to
 encounter an array and have that returned.  The BSON spec gets around this
 problem by returning a string indexed object where the keys
@@ -205,7 +220,18 @@ zero.  From the CLI, this will be seen as:
 The postgres array type does not help here because postgres requires a
 homogenous type and BSON allows for heterogenous types.  
 
-There are three ways to deal with this:
+**The scalar annoyance.**
+The same constraint means a dotpath that lands on a *scalar* has nothing that
+`bson_get_bson()` can legally return, because a bare string or int is not a
+BSON document.  It returns NULL:
+
+    select bson_column->'d.recordId' from ...    -- NULL, not "R1"
+
+That is technically correct and, if you know the type you are after, entirely
+avoidable -- use the typed accessor (`bson_get_string`, `bson_get_int32`, and
+friends) or `->>`.  It only bites when you do *not* know the type in advance.
+
+There are four ways to deal with all this:
 
   1.  If you don't need the whole array, access individual items using strings; note the double arrow and the quotes around '0':
       ```
@@ -250,6 +276,52 @@ There are three ways to deal with this:
       mydb=# select (bson_column,'d.payload')::jsonb ...
       ```
 
+  4.  Use the `bson_get_value` function.  This is the general answer, and the
+      only one that covers scalars, arrays, and documents with a single rule:
+      the value found at the dotpath is returned wrapped in a one-field
+      document under the key `_`.
+      ```
+      mydb=# select bson_get_value(bson_column,'d.payload.vector') from ...
+       ?column?
+      --------------------------
+      { "_" : [ 21, 17, 19 ] }
+
+      mydb=# select bson_get_value(bson_column,'d.recordId') from ...
+       ?column?
+      --------------
+      { "_" : "R1" }
+
+      mydb=# select bson_get_value(bson_column,'d.payload') from ...
+       ?column?
+      ------------------------------------
+      { "_" : { "vector" : [ 21, 17, 19 ] } }
+      ```
+      The wrap is **unconditional** -- documents get wrapped too.  That is the
+      point: you always peel exactly one layer, so whatever emerges is the
+      true value.  Wrapping only scalars would make `{"_": 5}` ambiguous, since
+      it could mean the scalar `5` or a document that genuinely *is* `{"_": 5}`.
+
+      Because the array is a *value* inside the wrapper rather than the top
+      level document, it stays a real BSON array -- no string indexed
+      `{"0":..,"1":..}` form, and no `jsonb` detour.  Client drivers decode it
+      as a native list:
+      ```
+      doc = bson.decode(row[0])   # psycopg2 + pymongo's bson
+      doc['_']                    # -> [21, 17, 19], a python list
+      ```
+      Scalars keep full type fidelity as well, which is what `->>` cannot do:
+      a `decimal128` comes back as a `decimal128` and not as its rendering.
+
+      The key is `_` and not `$value` deliberately.  Text I/O for the `bson`
+      type round trips through extended JSON, where a leading `$` on a top
+      level key risks being read back as an EJSON type wrapper.
+
+      Note there is deliberately **no `->` style operator** for this.  Arrow
+      operators must compose with themselves, and the wrapper breaks that --
+      every hop in a chain would need an interposed `->'_'`.  `bson_get_value`
+      is terminal by design: call it once, at the end of navigation, and
+      unwrap.  A missing path returns NULL, like every other accessor.
+
 Status
 ======
 
@@ -261,6 +333,20 @@ Release notes
 
 Unreleased
 ----------
+
+**New: `bson_get_value(bson_column, dotpath)`.**  The general purpose
+extractor, and the answer to two long standing TO DO items.  Works for every
+BSON type, scalar or not; returns the value wrapped in a one-field document
+under the key `_`:
+
+    select bson_get_value(bson_column, 'd.recordId');       -->  {"_": "R1"}
+    select bson_get_value(bson_column, 'd.vector');         -->  {"_": [21,17,19]}
+    select bson_get_value(bson_column, 'd.payload');        -->  {"_": {...}}
+
+Use it when you do not know the type at the dotpath in advance, or when you
+want an array back as a real array instead of the string indexed
+`{"0":..,"1":..}` form.  Nothing existing changes behavior.  See "Scalars,
+Arrays, BSON, and JSON".
 
 **Fixed: backend segfault in `bson_get_bson()` / the `->` operator when a
 dotpath resolved to a scalar.**  BSON cannot be built from a bare scalar, so
@@ -612,6 +698,15 @@ Field access (supports dot notation):
 
 *  bson_get_bson(bson_column, dotpath) RETURNS bson
 
+*  bson_get_value(bson_column, dotpath) RETURNS bson
+
+   The general purpose extractor: works for every BSON type, scalar or not.
+   The value at the dotpath is returned wrapped in a one-field document under
+   the key `_` -- unconditionally, so you always peel exactly one layer.  This
+   is the way to retrieve a value whose type you do not know in advance, and
+   the way to get an array back as a real array.  Terminal by design; there is
+   no `->` equivalent.  See "Scalars, Arrays, BSON, and JSON" above.
+
 *  bson_get_jsonb_array(bson_column, dotpath) RETURNS jsonb
 
 *  bson_as_text(bson_column, dotpath) RETURNS text
@@ -627,15 +722,14 @@ TO DO
 ========
  1.  **Significantly** tidy up test driver
  
- 2.  Need something better when extracting arrays.
- 
- 3.  Need something better when bson_get_bson() resolves to a scalar because
-     simple scalars like a string are not BSON.  Currently, it just returns NULL
-     which is "technically correct" but unsatisfying
-     
- 4.  Need more docs or a more clever solution for when calling `bson_get_{type}`
+ 2.  Need more docs or a more clever solution for when calling `bson_get_{type}`
      points to a field that exists but the type is wrong.  Currently it just
-     returns null because that is "safest."   
+     returns null because that is "safest."
+
+     `bson_get_value()` takes some of the sting out of this: a type mismatch is
+     no longer a dead end, because you can always retrieve the value regardless
+     of its type and inspect it.  But the typed accessors themselves still give
+     you no way to tell "field absent" from "field present, wrong type."
 
 
 

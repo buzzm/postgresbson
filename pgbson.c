@@ -631,6 +631,85 @@ Datum bson_get_bson(PG_FUNCTION_ARGS)
 }
 
 
+/*
+ * bson_get_value() is the general purpose extractor: it works for EVERY BSON
+ * type, scalar or not.  BSON cannot be built from a bare scalar (or a bare
+ * array), so the value found at the dotpath is returned wrapped in a
+ * single-field document under the key "_":
+ *
+ *     path holds  {"corn":"dog"}   ->  {"_": {"corn":"dog"}}
+ *     path holds  "hello"          ->  {"_": "hello"}
+ *     path holds  [2,3,5,7]        ->  {"_": [2,3,5,7]}
+ *
+ * The wrap is UNCONDITIONAL, which is the whole point: the caller always peels
+ * exactly one layer, so whatever emerges is the true value.  Wrapping only
+ * scalars would make {"_": 5} ambiguous -- it could mean the scalar 5, or a
+ * document that genuinely is {"_": 5}.  Wrapping everything removes that.
+ *
+ * Wrapping an array also sidesteps the string-indexed {"0":..,"1":..} form
+ * that bson_get_bson() is forced into: inside the wrapper the array is a
+ * VALUE, not the top level document, so drivers decode it as a real array.
+ *
+ * "_" and not "$value" deliberately: bson_out()/bson_in() round trip through
+ * extended JSON, where a leading $ on a top level key risks being read back as
+ * an EJSON type wrapper by bson_new_from_json().
+ *
+ * Note there is no -> style operator for this.  Arrow operators have to
+ * compose with themselves and the wrapper breaks that -- every hop in a chain
+ * would need an interposed ->'_'.  This function is terminal by design: call
+ * it once, at the end of navigation, and unwrap.
+ *
+ * bson_iter_value() covers every BSON type in one shot, so unlike
+ * bson_as_text() there is no per-type switch here -- and thus no per-type
+ * bug surface.
+ */
+PG_FUNCTION_INFO_V1(bson_get_value);  // bson bson_get_value(bson, dotpath)
+Datum bson_get_value(PG_FUNCTION_ARGS)
+{
+    bytea* aa = BSON_GETARG_BSON(0);
+    text* dotpath = PG_GETARG_TEXT_PP(1);
+
+    bson_t b;   // on stack
+    bson_t out; // libbson allocated; must be bson_destroy'd
+    bson_iter_t iter;
+    bson_iter_t target;
+    bytea* bbb;
+    char* c_dotpath;
+    bool rc;
+
+    BSON_STATIC_INIT(&b,aa);
+
+#ifdef PGBSON_DEBUG
+    (void) fprintf(stderr, "bson_get_value()\n");
+#endif
+
+    if(!bson_iter_init(&iter, &b)) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("BSON iter bytes corrupted in bson_get_value"))
+	    );
+    }
+
+    c_dotpath = text_to_cstring(dotpath);
+    rc = bson_iter_find_descendant(&iter, c_dotpath, &target);
+    pfree(c_dotpath); // dotpath no longer needed
+
+    if(!rc) { // missing path is NULL, same as every other accessor
+	PG_FREE_IF_COPY(aa,0);
+	PG_RETURN_NULL();
+    }
+
+    bson_init(&out);
+    bson_append_value(&out, "_", 1, bson_iter_value(&target));
+
+    bbb = mk_palloc_bytea(&out); // copy into palloc'd memory...
+    bson_destroy(&out);          // ...then let libbson free its own
+
+    PG_FREE_IF_COPY(aa,0);
+    PG_RETURN_BYTEA_P(bbb);
+}
+
+
 PG_FUNCTION_INFO_V1(bson_get_jsonb_array);
 Datum bson_get_jsonb_array(PG_FUNCTION_ARGS)
 {
