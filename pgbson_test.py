@@ -400,6 +400,74 @@ def get_value_wraps_everything():
     return None
 
 
+#  Exercises the extension version machinery, not the C code: that an install
+#  still sitting at 2.0 can be moved forward with ALTER EXTENSION UPDATE and
+#  come out with the 2.1 function set.  This matters because CREATE EXTENSION
+#  runs the install script only at install time, so shipping a new function in
+#  pgbson--2.1.sql does nothing for somebody already on 2.0 -- the upgrade
+#  script pgbson--2.0--2.1.sql is what carries it across.
+#
+#  Note the shlib is NOT versioned along with the SQL: $libdir/pgbson is
+#  whatever the last make install put there and it serves every version, so
+#  an install marked 2.0 is already running current C code.  Only the SQL
+#  surface is gated.  That is why the 2.0 assertion below is about
+#  bson_get_value being absent from the CATALOG, not about behavior.
+#
+#  This test drops and recreates the extension, which takes bsontest with it
+#  (bson typed columns), so it calls init() at the end to put the world back
+#  for whatever runs after it.
+def extension_upgrade_path():
+    def one(sql):
+        curs.execute(sql)
+        conn.commit()
+
+    def version():
+        return fetchRow1Col(
+            "SELECT extversion FROM pg_extension WHERE extname='pgbson'")
+
+    def has_get_value():
+        return 0 != fetchRow1Col(
+            "SELECT count(*) FROM pg_proc WHERE proname='bson_get_value'")
+
+    msg = None
+
+    try:
+        one("drop table if exists bsontest CASCADE")
+        one("drop extension if exists pgbson CASCADE")
+
+        #  Land on the old version deliberately.
+        one("create extension pgbson version '2.0'")
+        if version() != '2.0':
+            return "could not install 2.0; got version %s" % version()
+        if has_get_value():
+            return "bson_get_value is in pgbson--2.0.sql; it must not be"
+
+        #  ...and walk it forward.
+        one("alter extension pgbson update to '2.1'")
+        if version() != '2.1':
+            return "ALTER EXTENSION UPDATE did not land on 2.1; got %s" % version()
+        if not has_get_value():
+            return "bson_get_value missing after upgrade to 2.1"
+
+        item = fetchRow1Col(
+            """SELECT bson_get_value('{"a":{"b":"scalar!"}}'::bson,'a.b')::text""")
+        if item != '{ "_" : "scalar!" }':
+            return "upgraded bson_get_value returned %s" % item
+
+        #  A fresh install must land on 2.1 by itself, i.e. pgbson.control's
+        #  default_version is the "main switch" and it got bumped.
+        one("drop extension pgbson CASCADE")
+        one("create extension pgbson")
+        if version() != '2.1':
+            return "default_version is not 2.1; fresh install gave %s" % version()
+
+    finally:
+        #  Put back what we tore down, whatever happened above.
+        init(None)
+
+    return msg
+
+
 def toast_test():
     """Put a big obj in there.  Look at 
 https://hakibenita.com/sql-medium-text-performance to get an idea of how
@@ -865,6 +933,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':bool_oid_as_text}
         ,{'-':scalar_arrow_returns_null}
         ,{'-':get_value_wraps_everything}
+        ,{'-':extension_upgrade_path}
         ,{'-':basic_internal_update}
 
         ,{'-':check1, 'desc':"string exists",

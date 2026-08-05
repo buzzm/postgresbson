@@ -10,7 +10,9 @@ A PostgreSQL extension (`pgbson`) implementing a `bson` data type backed by the 
 | File | Role |
 | --- | --- |
 | `pgbson.c` | The entire C implementation (~1000 lines, no headers of its own) |
-| `pgbson--2.0.sql` | Extension install script: type, casts, operators, opclasses, `CREATE FUNCTION` bindings |
+| `pgbson--2.1.sql` | Extension install script (current): type, casts, operators, opclasses, `CREATE FUNCTION` bindings |
+| `pgbson--2.0.sql` | The previous install script, frozen. Kept shippable so `CREATE EXTENSION pgbson VERSION '2.0'` still works and the upgrade path stays testable |
+| `pgbson--2.0--2.1.sql` | Upgrade delta: the one `CREATE FUNCTION bson_get_value` |
 | `pgbson.control` | Extension metadata for `CREATE EXTENSION` |
 | `Makefile` | PGXS build; top half is hand-edited local paths |
 | `pgbson_test.py` | The whole test suite (python + `psycopg2` + `bson`) |
@@ -47,7 +49,7 @@ C code silently, as would a pooler handing back a recycled backend. Restarting t
 just the sledgehammer that guarantees no backend survives.
 
 Note the `drop extension` / `create extension` in the test suite's `init()` is *not* what
-reloads the C code, though it is easy to believe it is. It does re-read `pgbson--2.0.sql` from
+reloads the C code, though it is easy to believe it is. It does re-read `pgbson--2.1.sql` from
 disk, so **SQL-level** changes — a new `CREATE FUNCTION`, a changed operator binding — really
 do take effect from the drop/create alone. Only the C half is tied to process lifetime.
 
@@ -135,7 +137,7 @@ values to text.
 ### Operators and index support
 
 `pgbson_compare` (libbson `bson_compare`) backs `=`/`<>`/`<`/`<=`/`>`/`>=`, each a one-line SQL
-wrapper in `pgbson--2.0.sql`, and is the btree opclass support function. `bson_binary_equal` backs the
+wrapper in `pgbson--2.1.sql`, and is the btree opclass support function. `bson_binary_equal` backs the
 distinct `==`/`<<>>` binary-identity operators and `bson_hash` backs the hash opclass. Both
 `bson_hash_ops` and `bson_btree_ops` are DEFAULT for the type.
 
@@ -150,8 +152,12 @@ else keeps the natural `bson_` prefix.
 A new accessor touches three files, in this order:
 
 1. `pgbson.c` — the `Datum fn(PG_FUNCTION_ARGS)` plus its `PG_FUNCTION_INFO_V1(fn)`.
-2. `pgbson--2.0.sql` — `CREATE FUNCTION ... AS 'MODULE_PATHNAME' LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;`
+2. `pgbson--2.1.sql` — `CREATE FUNCTION ... AS 'MODULE_PATHNAME' LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;`
    (that qualifier set is used uniformly and is what makes functional indexes work).
+   **And the matching upgrade script**, or existing installs never get the function: `CREATE
+   EXTENSION` runs the install script only at install time. Adding to `pgbson--2.1.sql` alone
+   serves fresh installs and nobody else. Either append to `pgbson--2.0--2.1.sql` if 2.1 is
+   unreleased, or start a new `pgbson--2.1--2.2.sql` and bump `default_version` if it is out.
 3. `pgbson_test.py` — a `check1` entry or a new function in the `all_tests` list.
 
 Then `make install`. A changed `.so` is picked up by any **new connection**, so running
@@ -173,11 +179,19 @@ restart" above.
 
 ## The three version numbers are independent — do not "fix" them
 
-`pgbson.control` (`default_version = '2.0'`), `META.json` (`"version": "2.0.4"`), and the string
-returned by `pgbson_version()` in `pgbson.c` (`"2.1"`) all differ, **by design**. They version three
-different things that move at different rates: the postgres binding (i.e. the SQL install script and
-what `CREATE EXTENSION` sees), the distribution published to PGXN, and the C code itself. They are
-not expected to agree, and reconciling them is not a cleanup task.
+`pgbson.control` (`default_version`), `META.json` (`"version"`), and the string returned by
+`pgbson_version()` in `pgbson.c` all version **three different things** that move at different
+rates: the postgres binding (i.e. the SQL install script and what `CREATE EXTENSION` sees), the
+distribution published to PGXN, and the C code itself. They are not expected to agree, and
+reconciling them is not a cleanup task.
 
-Note the SQL filename is tied to `pgbson.control`'s `default_version` and to `DATA` in the Makefile,
-so bumping *that* one specifically means renaming `pgbson--2.0.sql` and editing both files.
+**`pgbson.control` and `pgbson_version()` both currently read `2.1`. That is a coincidence, not a
+correspondence.** They arrived there independently and will drift apart again; do not treat their
+agreement as an invariant to preserve, and do not "restore" it if one moves.
+
+`pgbson.control`'s `default_version` is the main switch: it decides what a bare `CREATE EXTENSION
+pgbson` installs. Bumping it is a four-file move — rename the install script to match the new
+version, add a `pgbson--<old>--<new>.sql` upgrade delta, list **all** the scripts in `DATA` in
+both `Makefile` and `MyMake.mk`, and point `META.json`'s `"file"` at the new install script.
+Old install scripts stay shipped rather than deleted, so `CREATE EXTENSION pgbson VERSION '2.0'`
+keeps working and `extension_upgrade_path()` in the test suite has something real to upgrade from.

@@ -38,7 +38,7 @@ LOCAL_CFLAGS  = -Wno-format-security
 # The variable names are very specific; do not mess with them.
 MODULE_big = pgbson
 EXTENSION = pgbson          # the extension's name
-DATA = pgbson--2.0.sql    # script file to install
+DATA = pgbson--2.0.sql pgbson--2.1.sql pgbson--2.0--2.1.sql
 OBJS = pgbson.o
 
 PG_CFLAGS = $(BSON_INCLUDES) $(LOCAL_CFLAGS)

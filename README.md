@@ -334,6 +334,22 @@ Release notes
 Unreleased
 ----------
 
+**The extension version is now 2.1.**  A fresh `CREATE EXTENSION pgbson` picks
+it up automatically.  If you already have 2.0 installed, `make install` gives
+you the new shared library but *not* the new SQL, because `CREATE EXTENSION`
+runs its install script only at install time.  One statement finishes the job:
+
+    ALTER EXTENSION pgbson UPDATE TO '2.1';
+
+Nothing is removed and nothing changes behavior, so the upgrade is safe to run
+on a live database.  `CREATE EXTENSION pgbson VERSION '2.0'` still works if you
+want the older function set.
+
+Note the shared library is not versioned alongside the SQL: `$libdir/pgbson` is
+whatever the last `make install` put there and it serves every extension
+version.  So an install still marked 2.0 already has the segfault fix below --
+only the SQL surface is gated by the version you are on.
+
 **New: `bson_get_value(bson_column, dotpath)`.**  The general purpose
 extractor, and the answer to two long standing TO DO items.  Works for every
 BSON type, scalar or not; returns the value wrapped in a one-field document

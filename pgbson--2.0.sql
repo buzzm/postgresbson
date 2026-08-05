@@ -286,19 +286,6 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
 
--- The general purpose extractor: works for EVERY BSON type, scalar or not.
--- BSON cannot be built from a bare scalar or array, so the value at the
--- dotpath comes back wrapped in a one-field document under the key "_".
--- The wrap is unconditional: always peel exactly one layer.
---   select bson_get_value(bson_column, 'd.recordId');  -->  {"_": "R1"}
---   select bson_get_value(bson_column, 'd.vector');    -->  {"_": [2,3,5]}
--- Deliberately has no -> operator equivalent; it is terminal, not chainable.
--- See README.md "Scalars, Arrays, BSON, and JSON".
-CREATE FUNCTION bson_get_value(bson, text) RETURNS bson
-AS 'MODULE_PATHNAME'
-LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
-
-
 -- See README.md for special value of this function.
 CREATE FUNCTION bson_get_jsonb_array(bson, text) RETURNS jsonb
 AS 'MODULE_PATHNAME'
