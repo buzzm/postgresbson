@@ -439,6 +439,23 @@ in.  Cast the column to `jsonb` if you want the wrapped form.
 Following a path that does not exist still yields NULL, as does a path
 resolving to an explicit BSON null.  That is unchanged.
 
+**Binary format input works.**  The type's binary receive function read the
+wrong memory and could crash the backend, so `COPY ... FROM (FORMAT binary)`
+and drivers that send parameters in binary were unusable.  Incoming bytes are
+now validated exactly like a `bytea::bson` cast.  Text format input (what
+psycopg2 uses) was never affected.
+
+**`bson_get_datetime` returns NULL for dates postgres cannot represent.**  A
+BSON datetime spans roughly 292 million years either side of 1970; a postgres
+`timestamp` spans 4713 BC to 294276 AD.  Out of range values used to yield a
+garbage timestamp and now yield NULL.  Dates before 1970 were and still are
+converted correctly.
+
+**Strings with an embedded NUL are truncated at the NUL.**  BSON permits a NUL
+byte inside a string; postgres `text` does not.  `bson_get_string` and `->>`
+therefore return everything up to the first NUL.  This is not new, just now
+documented.
+
 
 Example
 =======

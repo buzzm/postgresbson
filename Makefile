@@ -10,11 +10,12 @@
 #           -I/usr/include/libbson-1.0/bson
 #           -L/usr/lib64 -lbson-1.0
 #  
-#  It is very important that the lib can be found at the proper path
-#  AT RUNTIME by postgres; that is the purpose of the -L option.  This
-#  should probably be something like /usr/local/lib,
-#  /usr/local/lib/postgres, /usr/lib64, etc.
-#  Wherever pgbson.so (or pgbson.dylib) gets installed, check with ldd (or
+#  -L only tells the linker where to find libbson at BUILD time; it does
+#  NOT control where postgres finds it at RUNTIME.  Runtime lookup is the
+#  dynamic loader's job:  the system library paths (e.g. /usr/lib64,
+#  /usr/local/lib; ldconfig on Linux), an rpath/@rpath baked into the
+#  shlib, or LD_LIBRARY_PATH / DYLD_LIBRARY_PATH in postgres' environment.
+#  A build that links fine can still fail to load.  Wherever pgbson.so (or pgbson.dylib) gets installed, check with ldd (or
 #  otool -L) that it knows about libbson e.g.:
 #        $ ldd /usr/pgsql-16/lib/pgbson.so
 #            linux-vdso.so.1 (0x00007ffc78f22000)
@@ -31,8 +32,7 @@ BSON_INCLUDES = -I$(HOME)/projects/bson/include
 BSON_SHLIB    = -L$(HOME)/projects/bson/lib -lbson.1
 
 
-# Suppress passing vars instead of string literals in ereport errmsg:
-LOCAL_CFLAGS  = -Wno-format-security
+LOCAL_CFLAGS  =
 
 # From here down is part of pgxs framework and should run anywhere.
 # The variable names are very specific; do not mess with them.

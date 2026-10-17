@@ -31,6 +31,7 @@
 // includes to support BSON<->timestamp
 #include <utils/timestamp.h>
 #include <datatype/timestamp.h>
+#include <common/int.h>   // pg_sub_s64_overflow, pg_mul_s64_overflow
 
 // includes to support BSON<->numeric
 #include <utils/numeric.h>
@@ -57,9 +58,9 @@
 //  AND:  Don't forget; we must use VARDATA_ANY when using PG_DETOAST_DATUM_PACKED
 #define BSON_VARDATA_ANY(X)  (uint8_t*)VARDATA_ANY(X)      
 
-#define BSON_ERRMSG_BUF_SIZE   256   // Plenty big to hold a message.
+// errmsg() is printf-like:  never hand it a variable as the format.
 #define BSON_STATIC_INIT(BPTR,AA)					\
-      do {if(!bson_init_static(BPTR, BSON_VARDATA_ANY(AA), VARSIZE_ANY_EXHDR(AA))) { char emsg[BSON_ERRMSG_BUF_SIZE] = "cannot init bson in "; strcat(emsg,__func__); ereport(ERROR, (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg(emsg))); } }  while(0)
+      do {if(!bson_init_static(BPTR, BSON_VARDATA_ANY(AA), VARSIZE_ANY_EXHDR(AA))) { ereport(ERROR, (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("cannot init bson in %s", __func__))); } }  while(0)
 
       
 
@@ -154,7 +155,10 @@ Datum bson_in(PG_FUNCTION_ARGS)
     } else {
 	ereport(
 	    ERROR,
-	    (errcode(ERRCODE_INVALID_JSON_TEXT), errmsg(err.message))
+	    (errcode(ERRCODE_INVALID_JSON_TEXT), errmsg("%s", err.message))
+	    // "%s", not errmsg(err.message):  the libbson parse error can
+	    // echo fragments of the input, so a stray %n in a bad literal
+	    // would otherwise be interpreted as a format directive.
 	    );
 
 	PG_RETURN_NULL();
@@ -217,19 +221,65 @@ Datum bson_send(PG_FUNCTION_ARGS)
 }
 
 
+// Shared by bson_recv and pgbson_validate:  check that len bytes at data
+// are well formed BSON, then return a palloc'd copy.  Errors if not.
+static bytea* _validate_and_copy(const uint8_t* data, int len)
+{
+    bson_t b; // on stack
+    bson_error_t error; // on stack
+    bson_validate_flags_t flags;
+
+    if(len < 5) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("bytes too short to be BSON"))
+	    );
+    }
+
+    if(!bson_init_static(&b, data, len)) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("basic BSON init fails; not BSON?"))
+	    );
+    }
+
+    /*  No need for special checks for mongodb...
+    bson_validate_flags_t flags = BSON_VALIDATE_UTF8
+	| BSON_VALIDATE_DOLLAR_KEYS
+	| BSON_VALIDATE_DOT_KEYS
+	| BSON_VALIDATE_UTF8_ALLOW_NULL
+	| BSON_VALIDATE_EMPTY_KEYS;
+    */
+
+    flags = 0; // No special flags; just walk the structure...
+    if(!bson_validate_with_error(&b, flags, &error)) {
+	ereport(
+	    ERROR,
+	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("invalid BSON"))
+	    // error.message is boring, just "corrupt BSON"; no indication of
+	    // where the corruption occurred.
+	    );
+    }
+
+    // OK!
+    return mk_palloc_bytea(&b);
+}
+
+
 // This is: get BSON pointer from outside, save BSON in DB
+// Called for binary format input:  COPY ... (FORMAT binary), and drivers
+// that send parameters in binary.  The arg is the StringInfo message
+// buffer; the BSON is everything from its cursor to the end, and we must
+// consume it (advance the cursor) or postgres complains.  These bytes come
+// straight off the wire so they get the same validation as bytea::bson.
 PG_FUNCTION_INFO_V1(bson_recv);
 Datum bson_recv(PG_FUNCTION_ARGS)
-{   
-    bytea* aa;
+{
     StringInfo	buf = (StringInfo) PG_GETARG_POINTER(0);
+    int len = buf->len - buf->cursor;
+    const char* data = pq_getmsgbytes(buf, len);
 
-    bson_t b; // on stack
-    bson_init_static(&b, (const uint8_t*) buf, buf->len);
-    
-    aa = mk_palloc_bytea(&b);
-	
-    PG_RETURN_BYTEA_P(aa);
+    PG_RETURN_BYTEA_P(_validate_and_copy((const uint8_t*) data, len));
 }
 
 
@@ -242,9 +292,6 @@ Datum bson_recv(PG_FUNCTION_ARGS)
 PG_FUNCTION_INFO_V1(pgbson_validate);
 Datum pgbson_validate(PG_FUNCTION_ARGS)
 {
-    bool rc;
-    bson_error_t error; // on stack
-    bson_validate_flags_t flags;
     bytea* bbb;
 
 #ifdef PGBSON_DEBUG
@@ -252,47 +299,8 @@ Datum pgbson_validate(PG_FUNCTION_ARGS)
 #endif
     
     bytea* aa = BSON_GETARG_BSON(0); // No validation here...
-    
-    bson_t b; // on stack
 
-    if(VARSIZE_ANY_EXHDR(aa) < 5) {
-	ereport(
-	    ERROR,
-	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("bytea too short to be BSON"))
-	    );
-    }
-    
-    rc = bson_init_static(&b, BSON_VARDATA_ANY(aa), VARSIZE_ANY_EXHDR(aa));
-
-    if(!rc) {
-	ereport(
-	    ERROR,
-	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("basic BSON init fails; not BSON?"))
-	    );
-    }
-	
-    /*  No need for special checks for mongodb...
-    bson_validate_flags_t flags = BSON_VALIDATE_UTF8
-	| BSON_VALIDATE_DOLLAR_KEYS
-	| BSON_VALIDATE_DOT_KEYS
-	| BSON_VALIDATE_UTF8_ALLOW_NULL
-	| BSON_VALIDATE_EMPTY_KEYS;
-    */
-    
-    flags = 0; // No special flags; just walk the structure...    
-    rc = bson_validate_with_error(&b, flags, &error);
-    
-    if(!rc) {
-	ereport(
-	    ERROR,
-	    (errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("invalid BSON"))
-	    // error.message is boring, just "corrupt BSON"; no indication of
-	    // where the corruption occurred.
-	    );	
-    }
-    
-    // OK!
-    bbb = mk_palloc_bytea(&b);    
+    bbb = _validate_and_copy(BSON_VARDATA_ANY(aa), VARSIZE_ANY_EXHDR(aa));
 
     PG_FREE_IF_COPY(aa,0);
     
@@ -358,8 +366,10 @@ Datum bson_hash(PG_FUNCTION_ARGS)
     uint8_t* data = BSON_VARDATA_ANY(aa);
     uint32 sz = VARSIZE_ANY_EXHDR(aa);
 
-    int hash = 5381; // ?
-    int c;
+    // Unsigned:  signed overflow is undefined in C.  Wraps to the same
+    // bits the old signed int produced, so existing hash indexes are valid.
+    uint32 hash = 5381; // ?
+    uint32 c;
 
     for(uint32 n = 0; n < sz; n++) {
 	c = *data++;
@@ -368,7 +378,7 @@ Datum bson_hash(PG_FUNCTION_ARGS)
 
     PG_FREE_IF_COPY(aa,0);    
     
-    PG_RETURN_INT32(hash);
+    PG_RETURN_UINT32(hash);
 }
 
 
@@ -446,6 +456,9 @@ Datum bson_get_string(PG_FUNCTION_ARGS)
 	// bson_iter_utf8() returns a pointer that MUST NOT be
 	// modified or freed; fine, because we have to palloc it into
 	// text anyway....
+	// len is deliberately unused.  BSON strings may legally carry an
+	// embedded NUL but postgres text may not, so mk_text's strlen()
+	// truncating at the first NUL is the intended behavior.
 	txt = mk_text( bson_iter_utf8(&target, &len) );
     }
 
@@ -455,30 +468,25 @@ Datum bson_get_string(PG_FUNCTION_ARGS)
 }
 
 
-static Timestamp _cvt_datetime_to_ts(int64_t millis_since_epoch)
+// BSON datetime is signed int64 millis since the unix epoch, UTC.
+// Postgres Timestamp is int64 micros since 2000-01-01.  So it is just
+// shift the epoch and scale; no struct tm, no gmtime(), and negative
+// (pre-1970) values need no special handling.  Returns false if the
+// result is outside the range postgres timestamp can represent (BSON's
+// range is far wider); the caller makes that NULL, not an error.
+#define BSON_UNIX_TO_PG_EPOCH_MS \
+    ((int64_t)(POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY * 1000)
+
+static bool _cvt_datetime_to_ts(int64_t millis_since_epoch, Timestamp* ts)
 {
-    Timestamp ts;
-    struct pg_tm tt, *tm = &tt;
-    fsec_t fsec;
-    
-    time_t t_unix = millis_since_epoch/1000; // get seconds..
-    unsigned t_ms = millis_since_epoch%1000; // ... and the millis...
+    int64 pg_millis;
 
-    struct tm unix_tm = *gmtime(&t_unix); // gmtime returns pointer; copy via *
+    if(pg_sub_s64_overflow(millis_since_epoch, BSON_UNIX_TO_PG_EPOCH_MS, &pg_millis)
+       || pg_mul_s64_overflow(pg_millis, 1000, ts)) {
+	return false;
+    }
 
-    tt.tm_mday = unix_tm.tm_mday;
-    tt.tm_mon  = unix_tm.tm_mon + 1;  // POSIX is 0-11; must add 1 for postgres
-    tt.tm_year = unix_tm.tm_year + 1900; // POSIX is 1900; postgres starts at 1
-	
-    tt.tm_hour = unix_tm.tm_hour;
-    tt.tm_min  = unix_tm.tm_min;
-    tt.tm_sec  = unix_tm.tm_sec;
-
-    fsec = t_ms * 1000; // turn millis to micros
-
-    tm2timestamp(tm, fsec, NULL, &ts);
-
-    return ts;
+    return IS_VALID_TIMESTAMP(*ts);
 }
 
 
@@ -499,7 +507,7 @@ Datum bson_get_datetime(PG_FUNCTION_ARGS)
     if(rc) {
 	int64_t millis_since_epoch = bson_iter_date_time (&target);
 
-	ts = _cvt_datetime_to_ts(millis_since_epoch);
+	rc = _cvt_datetime_to_ts(millis_since_epoch, &ts);
     }
 
     PG_FREE_IF_COPY(aa,0);
@@ -784,7 +792,6 @@ Datum bson_get_int32(PG_FUNCTION_ARGS)
     rc = _get_bson_iter(&b, dotpath, &target, BSON_TYPE_INT32);
     if(rc) {
 	val = bson_iter_int32(&target);
-	PG_RETURN_INT32(val);
     }
 
     PG_FREE_IF_COPY(aa,0);
@@ -912,7 +919,9 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 	    switch(ft) {
 	    case BSON_TYPE_UTF8: {
 		uint32_t len;		
-		txt = bson_iter_utf8(&target, &len); // NO NEED TO free()
+		// NO NEED TO free().  Truncates at an embedded NUL, as
+		// bson_get_string does; postgres text cannot hold one.
+		txt = bson_iter_utf8(&target, &len);
 		break;
 	    }
 	    case BSON_TYPE_DOUBLE: {

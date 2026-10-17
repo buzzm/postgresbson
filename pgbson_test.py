@@ -836,6 +836,121 @@ def basic_internal_update():
     
     
 
+#  Regression test for bson_recv(), the type's binary receive function.  It
+#  used to hand libbson the StringInfo *struct* rather than the message bytes
+#  in it, so any binary format input read garbage and could crash the
+#  backend.  psycopg2 sends text format, so nothing else in this suite ever
+#  reached it; COPY (FORMAT binary) does.  Out through bson_send, back in
+#  through bson_recv, and the bytes must be identical.
+def binary_copy_roundtrip():
+    import io
+
+    rb = insertBson(sdata)
+
+    buf = io.BytesIO()
+    curs.copy_expert("COPY (SELECT bdata FROM bsontest) TO STDOUT (FORMAT binary)", buf)
+    buf.seek(0)
+
+    curs.execute("TRUNCATE TABLE bsontest")
+    curs.copy_expert("COPY bsontest (bdata) FROM STDIN (FORMAT binary)", buf)
+
+    item = fetchRow1Col("SELECT bdata::bytea FROM bsontest")
+    if bytes(item) != rb:
+        return "bytes after binary COPY round trip do not match"
+
+    return None
+
+
+#  Binary input gets the same validation as bytea::bson.  Hand build a
+#  binary COPY stream around the corrupt bytes from cast_corrupt_bson: the
+#  COPY must fail cleanly, and the connection must still be usable after
+#  (a crashed backend would also "fail", so check that it did not).
+def binary_copy_rejects_corrupt():
+    import io
+    import struct
+
+    bad = bytes([0x0e, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x02, 0x00, 0x00,0x00,0x41,0x00, 0x00])
+
+    stream = (b"PGCOPY\n\xff\r\n\x00" + struct.pack("!ii", 0, 0)
+              + struct.pack("!hi", 1, len(bad)) + bad
+              + struct.pack("!h", -1))
+
+    try:
+        curs.copy_expert("COPY bsontest (bdata) FROM STDIN (FORMAT binary)", io.BytesIO(stream))
+        return "corrupt BSON accepted by binary COPY"
+    except psycopg2.OperationalError as err:
+        return "connection lost; backend crashed? %s" % err
+    except Exception:
+        pass  # good:  "invalid BSON"
+
+    conn.rollback()
+    if fetchRow1Col("SELECT 1") != 1:
+        return "connection unusable after rejected binary COPY"
+
+    return None
+
+
+#  BSON datetime is signed millis since 1970, so pre-1970 values are
+#  negative and the seconds/millis split has to round toward -infinity, not
+#  zero.  Values beyond postgres' timestamp range (4713 BC - 294276 AD) must
+#  be NULL, not garbage.
+def datetime_edges():
+    epoch = datetime.datetime(1970,1,1)
+    ms = datetime.timedelta(milliseconds=1)
+
+    for millis, expected in [
+            (0,     epoch),
+            (1,     epoch + ms),
+            (-1,    epoch - ms),
+            (-500,  epoch - 500*ms),
+            (-999,  epoch - 999*ms),
+            (-1000, epoch - 1000*ms),
+            (-1500, epoch - 1500*ms),
+            (-86400000 * 365 * 100 - 1, epoch - (86400000 * 365 * 100 + 1)*ms),
+            ( 9000000000000000000, None),
+            (-9000000000000000000, None)
+    ]:
+        sql = """SELECT bson_get_datetime('{"d":{"$date":{"$numberLong":"%d"}}}'::bson, 'd')""" % millis
+        item = fetchRow1Col(sql)
+        if item != expected:
+            return "%d millis: got %s, expected %s" % (millis, item, expected)
+
+    return None
+
+
+#  BSON strings may contain a NUL; postgres text may not.  Truncating at the
+#  NUL is the documented behavior for both bson_get_string and ->>.
+def embedded_nul_truncates():
+    insertBson({"s": "abc\x00def"})
+
+    for sql in ["SELECT bson_get_string(bdata, 's') FROM bsontest",
+                "SELECT bdata->>'s' FROM bsontest"]:
+        item = fetchRow1Col(sql)
+        if item != "abc":
+            return "%s: got %r, expected 'abc'" % (sql, item)
+
+    return None
+
+
+#  bson_hash moved from signed int (overflow is undefined behavior) to
+#  uint32.  The bits must be exactly the old wrapping DJB2, or existing hash
+#  indexes would silently stop finding rows.
+def hash_bits_unchanged():
+    rb = insertBson(sdata)
+
+    h = 5381
+    for c in rb:
+        h = (h * 33 + c) & 0xFFFFFFFF
+    if h >= 0x80000000:
+        h -= 0x100000000  # int4 as postgres returns it
+
+    item = fetchRow1Col("SELECT bson_hash(bdata) FROM bsontest")
+    if item != h:
+        return "got %s, expected %s" % (item, h)
+
+    return None
+
+
 def basic_roundtrip(args):
     """If this does not work, the whole thing is pointless."""
 
@@ -933,6 +1048,11 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':bool_oid_as_text}
         ,{'-':scalar_arrow_returns_null}
         ,{'-':get_value_wraps_everything}
+        ,{'-':binary_copy_roundtrip}
+        ,{'-':binary_copy_rejects_corrupt}
+        ,{'-':datetime_edges}
+        ,{'-':embedded_nul_truncates}
+        ,{'-':hash_bits_unchanged}
         ,{'-':extension_upgrade_path}
         ,{'-':basic_internal_update}
 
