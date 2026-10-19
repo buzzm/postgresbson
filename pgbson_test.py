@@ -954,6 +954,31 @@ def datetime_as_text_format():
     return None
 
 
+#  bson_array_as_json() returns NULL for an array holding a string that is
+#  not valid UTF-8, and bson_get_jsonb_array() used to hand that NULL to
+#  jsonb_in(), crashing the backend.  Whether the bytes get past the bytea
+#  cast depends on write-side validation; either a clean error or a NULL is
+#  fine here.  What is not fine is the connection dying.
+def jsonb_array_bad_utf8_no_crash():
+    # {"a": ["\xff"]}
+    d = bytes([0x16,0,0,0, 0x04,0x61,0, 0x0e,0,0,0, 0x02,0x30,0, 0x02,0,0,0,0xff,0, 0, 0])
+    try:
+        curs.execute("SELECT bson_get_jsonb_array(%s::bytea::bson, 'a')", (d,))
+        curs.fetchall()
+    except psycopg2.OperationalError as e:
+        conn.rollback()
+        return "backend died: %s" % e
+    except Exception:
+        pass  # clean ERROR is acceptable
+    conn.rollback()
+
+    #  Prove the session still works:
+    if fetchRow1Col("SELECT 1") != 1:
+        return "connection unusable after bad array"
+
+    return None
+
+
 #  bson_hash moved from signed int (overflow is undefined behavior) to
 #  uint32.  The bits must be exactly the old wrapping DJB2, or existing hash
 #  indexes would silently stop finding rows.
@@ -1076,6 +1101,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':embedded_nul_truncates}
         ,{'-':hash_bits_unchanged}
         ,{'-':datetime_as_text_format}
+        ,{'-':jsonb_array_bad_utf8_no_crash}
         ,{'-':extension_upgrade_path}
         ,{'-':basic_internal_update}
 
