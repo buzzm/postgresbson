@@ -383,6 +383,55 @@ Datum bson_binary_equal(PG_FUNCTION_ARGS)
     PG_RETURN_BOOL(cmp);
 }
 
+// The =, <>, <, <=, >, >= and <<>> operators bind straight to these.  They
+// used to be LANGUAGE SQL wrappers that called pgbson_compare()/
+// bson_binary_equal() by bare name, so they were resolved through the
+// CALLER's search_path at run time: anyone who could create a function of that
+// name in an earlier schema on a victim's search_path got it run with the
+// victim's privileges.  A C function has no body to resolve.  Symbols are
+// pgbson_* because libbson already exports bson_equal and friends.
+PG_FUNCTION_INFO_V1(pgbson_eq);
+Datum pgbson_eq(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_BOOL(DatumGetInt32(pgbson_compare(fcinfo)) == 0);
+}
+
+PG_FUNCTION_INFO_V1(pgbson_ne);
+Datum pgbson_ne(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_BOOL(DatumGetInt32(pgbson_compare(fcinfo)) != 0);
+}
+
+PG_FUNCTION_INFO_V1(pgbson_lt);
+Datum pgbson_lt(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_BOOL(DatumGetInt32(pgbson_compare(fcinfo)) < 0);
+}
+
+PG_FUNCTION_INFO_V1(pgbson_le);
+Datum pgbson_le(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_BOOL(DatumGetInt32(pgbson_compare(fcinfo)) <= 0);
+}
+
+PG_FUNCTION_INFO_V1(pgbson_gt);
+Datum pgbson_gt(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_BOOL(DatumGetInt32(pgbson_compare(fcinfo)) > 0);
+}
+
+PG_FUNCTION_INFO_V1(pgbson_ge);
+Datum pgbson_ge(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_BOOL(DatumGetInt32(pgbson_compare(fcinfo)) >= 0);
+}
+
+PG_FUNCTION_INFO_V1(pgbson_binary_ne);
+Datum pgbson_binary_ne(PG_FUNCTION_ARGS)
+{
+    PG_RETURN_BOOL(!DatumGetBool(bson_binary_equal(fcinfo)));
+}
+
 // hash index support
 PG_FUNCTION_INFO_V1(bson_hash);
 Datum bson_hash(PG_FUNCTION_ARGS)
