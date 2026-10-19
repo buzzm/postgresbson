@@ -331,6 +331,38 @@ Working and mature.  All contribs / PRs / comments / issues welcome.
 Release notes
 =============
 
+2.1.2
+-----
+
+Bug fixes only; the extension version stays 2.1, so there is no `ALTER
+EXTENSION` to run.  `make install` and reconnect.  Thanks to Devrim Gündüz
+for all four fixes.
+
+**Loads on current libbson.**  Dates were rendered as text by a private
+libbson function that newer releases (e.g. 1.30) no longer export, so the
+shared library failed to load with `undefined symbol:
+_bson_iso8601_date_format`.  pgbson now formats dates itself.  Output is
+unchanged: ISO8601 UTC, with `.mmm` only when the milliseconds are non-zero.
+
+**`bson_get_jsonb_array` no longer crashes the backend** on an array it
+cannot render as JSON (for example, one holding invalid UTF-8).  It raises an
+ERROR instead.
+
+**Invalid UTF-8 is rejected on the way in.**  BSON strings and keys must be
+valid UTF-8 for `bytea::bson` casts and binary `COPY`; such a row used to break
+`SELECT`, `pg_dump` and the json casts.  Embedded NULs are still allowed (see
+2.1.1).  Rows already stored are not rechecked.  Note: older libbson (1.23
+and earlier) does not check UTF-8 in string values even when asked, so there
+only keys are checked.
+
+**`bson_get_string` and `->>` return text in the database's encoding.**  BSON
+strings are UTF-8 and used to be copied as is, which is wrong in a non-UTF-8
+database.  They are now converted; a character with no equivalent in the
+database's encoding raises an ERROR.  In a UTF-8 database nothing changes,
+except that invalid UTF-8 already stored raises an ERROR rather than producing
+invalid text.
+
+
 2.1.1
 -----
 
