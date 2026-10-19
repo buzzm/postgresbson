@@ -251,7 +251,12 @@ static bytea* _validate_and_copy(const uint8_t* data, int len)
 	| BSON_VALIDATE_EMPTY_KEYS;
     */
 
-    flags = 0; // No special flags; just walk the structure...
+    // Strings and keys must be valid UTF-8.  Otherwise bson_out() (and so
+    // the json casts and pg_dump) fail on the row, bson_array_as_json()
+    // cannot render it, and bson_get_string() hands invalid text to postgres.
+    // ALLOW_NULL because BSON strings may legally carry an embedded NUL; the
+    // text accessors truncate there (see bson_get_string).
+    flags = BSON_VALIDATE_UTF8 | BSON_VALIDATE_UTF8_ALLOW_NULL;
     if(!bson_validate_with_error(&b, flags, &error)) {
 	ereport(
 	    ERROR,

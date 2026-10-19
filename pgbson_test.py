@@ -979,6 +979,36 @@ def jsonb_array_bad_utf8_no_crash():
     return None
 
 
+#  Strings and keys must be valid UTF-8 on the way in.  This goes through the
+#  bytea::bson cast; binary COPY shares _validate_and_copy.  Otherwise a row
+#  can make bson_out() error, which breaks SELECT, pg_dump and the json casts
+#  for that row.
+def reject_invalid_utf8():
+    bad = {
+        # {"s": "\xff"}
+        "bad string": bytes([0x0e,0,0,0, 0x02,0x73,0, 0x02,0,0,0,0xff,0, 0]),
+        # {"\xff": 1}
+        "bad key":    bytes([0x0c,0,0,0, 0x10,0xff,0, 0x01,0,0,0, 0]),
+    }
+    for what, d in bad.items():
+        try:
+            curs.execute("INSERT INTO bsontest (bdata) VALUES (%s)", (d,))
+            conn.rollback()
+            return "%s accepted by bytea insert" % what
+        except psycopg2.Error:
+            conn.rollback()
+
+    # Multi-byte UTF-8 must still go in, and come out intact:
+    insertBson({"s": "h\u00e9llo \u20ac \U0001F600"})
+    got = fetchRow1Col("SELECT bson_get_string(bdata, 's') FROM bsontest")
+    if got != "h\u00e9llo \u20ac \U0001F600":
+        return "valid UTF-8 did not round trip: %r" % got
+    if fetchRow1Col("SELECT bdata::text FROM bsontest") is None:
+        return "bson_out failed on valid UTF-8"
+
+    return None
+
+
 #  bson_hash moved from signed int (overflow is undefined behavior) to
 #  uint32.  The bits must be exactly the old wrapping DJB2, or existing hash
 #  indexes would silently stop finding rows.
@@ -1102,6 +1132,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':hash_bits_unchanged}
         ,{'-':datetime_as_text_format}
         ,{'-':jsonb_array_bad_utf8_no_crash}
+        ,{'-':reject_invalid_utf8}
         ,{'-':extension_upgrade_path}
         ,{'-':basic_internal_update}
 
