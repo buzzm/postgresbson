@@ -886,8 +886,51 @@ Datum bson_get_binary(PG_FUNCTION_ARGS)
 
 
 
-extern void
-_bson_iso8601_date_format (int64_t msec_since_epoch, bson_string_t *str);
+// ISO8601 UTC, e.g. 2022-03-03T12:13:14.789Z, with the ".mmm" only when the
+// millis are non-zero.  This used to call libbson's _bson_iso8601_date_format,
+// but that is a private symbol: it is not exported by current libbson and the
+// shlib then fails to load ("undefined symbol").  The public API has no
+// equivalent, so do it here.  Pure integer math (Howard Hinnant's
+// civil_from_days), so no gmtime(), no timezone, and pre-1970 and far-out
+// years just work.  Longest possible result is about 34 bytes.
+static void _fmt_iso8601(int64_t millis_since_epoch, char* buf, size_t bufsz)
+{
+    int64_t days = millis_since_epoch / 86400000;
+    int64_t msofday = millis_since_epoch % 86400000;
+    int64_t z, era, doe, yoe, y, doy, mp, d, m;
+    int secs, ms;
+
+    if(msofday < 0) {  // C division truncates toward zero; we want floor
+	msofday += 86400000;
+	days -= 1;
+    }
+
+    z = days + 719468;
+    era = (z >= 0 ? z : z - 146096) / 146097;
+    doe = z - era * 146097;
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    y = yoe + era * 400;
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    mp = (5 * doy + 2) / 153;
+    d = doy - (153 * mp + 2) / 5 + 1;
+    m = mp < 10 ? mp + 3 : mp - 9;
+    if(m <= 2) {
+	y += 1;
+    }
+
+    secs = (int)(msofday / 1000);
+    ms = (int)(msofday % 1000);
+
+    if(ms != 0) {
+	snprintf(buf, bufsz, "%04lld-%02d-%02dT%02d:%02d:%02d.%03dZ",
+		 (long long) y, (int) m, (int) d,
+		 secs / 3600, (secs / 60) % 60, secs % 60, ms);
+    } else {
+	snprintf(buf, bufsz, "%04lld-%02d-%02dT%02d:%02d:%02dZ",
+		 (long long) y, (int) m, (int) d,
+		 secs / 3600, (secs / 60) % 60, secs % 60);
+    }
+}
 
 PG_FUNCTION_INFO_V1(bson_as_text);  // text bson_get(bson, dotpath)
 Datum bson_as_text(PG_FUNCTION_ARGS)
@@ -959,16 +1002,7 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 	    }
 	    case BSON_TYPE_DATE_TIME: {
 		int64_t millis_since_epoch = bson_iter_date_time (&target);
-		bson_string_t* str = bson_string_new (NULL);
-		_bson_iso8601_date_format(millis_since_epoch, str);
-		// The size arg to bson_strncpy is the size of the DESTINATION,
-		// not the source: it copies at most size-1 bytes and always
-		// NUL terminates at dst[size-1].  Passing str->len therefore
-		// chopped the last character (the trailing "Z" of the ISO8601
-		// date) and the manual NUL below wrote one byte past that.
-		// sizeof(valbuf) is both correct and bounded.
-		bson_strncpy (valbuf, str->str, sizeof(valbuf));
-		bson_string_free(str, true); // true means "free segment" ?
+		_fmt_iso8601(millis_since_epoch, valbuf, sizeof(valbuf));
 		txt = valbuf;
 		break;
 	    }

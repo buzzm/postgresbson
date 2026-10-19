@@ -932,6 +932,28 @@ def embedded_nul_truncates():
     return None
 
 
+#  ->> on a date renders ISO8601 UTC, ".mmm" only when non-zero.  Includes
+#  pre-epoch, leap day, century boundaries and the extremes of 4 digit years.
+def datetime_as_text_format():
+    for iso in ["1970-01-01T00:00:00Z",
+                "1969-12-31T23:59:59.999Z",
+                "1969-12-31T23:59:59Z",
+                "1900-03-01T00:00:00Z",
+                "2000-02-29T12:34:56.789Z",
+                "2100-03-01T00:00:00.001Z",
+                "0001-01-01T00:00:00Z",
+                "9999-12-31T23:59:59.999Z"]:
+        curs.execute("TRUNCATE TABLE bsontest")
+        curs.execute("INSERT INTO bsontest (bdata) VALUES (%s::bson)",
+                     ('{"d": {"$date": "%s"}}' % iso,))
+        conn.commit()
+        got = fetchRow1Col("SELECT bdata->>'d' FROM bsontest")
+        if got != iso:
+            return "date %s rendered as %r" % (iso, got)
+
+    return None
+
+
 #  bson_hash moved from signed int (overflow is undefined behavior) to
 #  uint32.  The bits must be exactly the old wrapping DJB2, or existing hash
 #  indexes would silently stop finding rows.
@@ -1053,6 +1075,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':datetime_edges}
         ,{'-':embedded_nul_truncates}
         ,{'-':hash_bits_unchanged}
+        ,{'-':datetime_as_text_format}
         ,{'-':extension_upgrade_path}
         ,{'-':basic_internal_update}
 
