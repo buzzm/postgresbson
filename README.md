@@ -341,8 +341,11 @@ then:
     ALTER EXTENSION pgbson UPDATE TO '2.2';
 
 Install the new shared library *first*: the 2.2 SQL refers to C functions that
-earlier builds do not have.  `CREATE EXTENSION pgbson VERSION '2.1'` (or
-`'2.0'`) still works if you want the older function set.
+earlier builds do not have.  Until the `ALTER EXTENSION` runs, the database
+keeps the old operator functions described below, so don't skip it.
+`CREATE EXTENSION pgbson VERSION '2.1'` (or `'2.0'`) still works if you want
+the older function set.  Thanks again to Devrim Gündüz, who found and fixed
+this.
 
 **Security: the comparison operators no longer depend on `search_path`.**  `=`,
 `<>`, `<`, `<=`, `>`, `>=` and `<<>>` were bound to `LANGUAGE SQL` wrappers that
