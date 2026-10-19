@@ -119,7 +119,9 @@ Note the `$`-typename wrappers are part of the *output text* only, never part of
 
 `bytea`→`bson` is an implicit cast through `pgbson_validate`, which length-checks, `bson_init_static`s,
 and `bson_validate_with_error`s before copying. This is the guard against storing malformed junk via
-`insert ... values ('\x00...'::bytea)`. The read path assumes stored bytes are already valid and does
+`insert ... values ('\x00...'::bytea)`. The binary-protocol entry point, `bson_recv` (`COPY ... (FORMAT
+binary)`, binary-mode drivers), runs the same checks; both go through `_validate_and_copy()`. psycopg2
+sends text, so only the binary-COPY tests in `pgbson_test.py` exercise `bson_recv`. The read path assumes stored bytes are already valid and does
 no revalidation — keep it that way; that assumption is what makes reads fast.
 
 ### The two accessor families
@@ -137,16 +139,31 @@ values to text.
 
 ### Operators and index support
 
-`pgbson_compare` (libbson `bson_compare`) backs `=`/`<>`/`<`/`<=`/`>`/`>=`, each a one-line SQL
-wrapper in `pgbson--2.2.sql` (C functions `pgbson_eq` etc., deliberately not `LANGUAGE SQL`: an SQL body would be resolved through the caller's `search_path`), and is the btree opclass support function. `bson_binary_equal` backs the
-distinct `==`/`<<>>` binary-identity operators and `bson_hash` backs the hash opclass. Both
+`pgbson_compare` (libbson `bson_compare`) is the btree opclass support function and backs
+`=`/`<>`/`<`/`<=`/`>`/`>=` through one-line C wrappers (`pgbson_eq`, `pgbson_ne`, `pgbson_lt`,
+`pgbson_le`, `pgbson_gt`, `pgbson_ge`) that call it and test the result. `bson_binary_equal` backs
+`==` directly, and `pgbson_binary_ne` wraps it for `<<>>`. `bson_hash` backs the hash opclass. Both
 `bson_hash_ops` and `bson_btree_ops` are DEFAULT for the type.
+
+**Operator functions must be C, never `LANGUAGE SQL`.** Through 2.1 they were SQL wrappers
+calling `pgbson_compare()` by bare name. An SQL body resolves names through the *caller's*
+`search_path` at run time, so a same-named function planted in an earlier schema ran instead,
+with the caller's privileges. The extension is `relocatable`, so the body can't be
+schema-qualified either. 2.2 (PR #6) rebound all seven to C; don't reintroduce SQL wrappers.
 
 ### Naming: the `pgbson_` prefix collision rule
 
-libbson already exports `bson_compare`, `bson_validate`, and `bson_version`. Those three (and only
-those) are named `pgbson_compare`, `pgbson_validate`, `pgbson_version` in this extension. Everything
-else keeps the natural `bson_` prefix.
+libbson already exports `bson_compare`, `bson_validate`, and `bson_version`, so those three are
+named `pgbson_compare`, `pgbson_validate`, `pgbson_version` in this extension, in both C and SQL.
+
+The operator functions are the other exception, and only on the C side: their SQL names stay
+`bson_equal`, `bson_not_equal`, `bson_lt`, `bson_lte`, `bson_gt`, `bson_gte`,
+`bson_binary_not_equal`, but the C symbols they bind to (`AS 'MODULE_PATHNAME', 'pgbson_eq'`)
+are `pgbson_eq`, `pgbson_ne`, `pgbson_lt`, `pgbson_le`, `pgbson_gt`, `pgbson_ge`,
+`pgbson_binary_ne`. libbson already exports a C `bson_equal`, so that one had to be renamed, and
+the rest follow it for consistency.
+
+Everything else keeps the natural `bson_` prefix, with the same name in C and SQL.
 
 ## Adding or changing a function
 
@@ -170,8 +187,9 @@ restart" above.
 
 - PGXS compiles with `-Wdeclaration-after-statement`. Declarations go at the top of the block —
   commit `e8375bf` was a dedicated pass to clean these up, so don't reintroduce them.
-- `LOCAL_CFLAGS = -Wno-format-security` exists because `ereport(... errmsg(var))` is used with
-  non-literal messages (notably `err.message` from libbson and the `BSON_STATIC_INIT` buffer).
+- Never pass a variable as the `errmsg()` format: write `errmsg("%s", err.message)`. libbson's JSON
+  parse errors can echo user input, so `errmsg(err.message)` is a format-string bug. The old
+  `-Wno-format-security` suppression was removed in `d3112eb`; don't bring it back.
 - `#define PGBSON_DEBUG` near the top of `pgbson.c` enables the `fprintf(stderr, ...)` tracing that
   most functions already carry.
 - There are two large commented-out experimental blocks at the end of `pgbson.c`
