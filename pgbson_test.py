@@ -1009,6 +1009,59 @@ def reject_invalid_utf8():
     return None
 
 
+#  BSON strings are UTF-8 but postgres text must be in the server encoding.
+#  Needs a non-UTF-8 database to mean anything, so make a throwaway LATIN1
+#  one; if we are not allowed to, there is nothing to check.
+def text_in_server_encoding():
+    from psycopg2 import extensions
+    dbname = "pgbson_latin1_test"
+    admin = psycopg2.connect(DSN)
+    admin.autocommit = True
+    ac = admin.cursor()
+    try:
+        ac.execute("DROP DATABASE IF EXISTS %s" % dbname)
+        ac.execute("CREATE DATABASE %s TEMPLATE template0 ENCODING 'LATIN1' LC_COLLATE 'C' LC_CTYPE 'C'" % dbname)
+    except psycopg2.Error as e:
+        print("  (cannot create LATIN1 database, skipping: %s)" % str(e).strip())
+        admin.close()
+        return None
+
+    msg = None
+    try:
+        c2 = psycopg2.connect(extensions.make_dsn(DSN, dbname=dbname))
+        c2.autocommit = True
+        cu = c2.cursor()
+        cu.execute("CREATE EXTENSION pgbson")
+        cu.execute("SELECT 1 FROM pg_database WHERE datname = current_database() AND pg_encoding_to_char(encoding) = 'LATIN1'")
+        if cu.fetchone() is None:
+            raise Exception("test database is not LATIN1")
+
+        # "caf\u00e9" is 4 characters: 5 bytes in UTF-8, 4 in LATIN1
+        doc = safe_bson_encode({"s": "caf\u00e9"})
+        for expr in ["bson_get_string(%s::bytea::bson, 's')",
+                     "(%s::bytea::bson)->>'s'"]:
+            cu.execute("SELECT octet_length(" + expr + ")", (doc,))
+            n = cu.fetchone()[0]
+            if n != 4:
+                msg = "%s: %d bytes, expected 4 (not converted to server encoding?)" % (expr, n)
+                break
+
+        # No equivalent in LATIN1: a clean ERROR, not mojibake
+        euro = safe_bson_encode({"s": "\u20ac"})
+        try:
+            cu.execute("SELECT bson_get_string(%s::bytea::bson, 's')", (euro,))
+            cu.fetchall()
+            msg = msg or "unrepresentable character did not raise an error"
+        except psycopg2.Error:
+            pass
+        c2.close()
+    finally:
+        ac.execute("DROP DATABASE IF EXISTS %s" % dbname)
+        admin.close()
+
+    return msg
+
+
 #  bson_hash moved from signed int (overflow is undefined behavior) to
 #  uint32.  The bits must be exactly the old wrapping DJB2, or existing hash
 #  indexes would silently stop finding rows.
@@ -1133,6 +1186,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':datetime_as_text_format}
         ,{'-':jsonb_array_bad_utf8_no_crash}
         ,{'-':reject_invalid_utf8}
+        ,{'-':text_in_server_encoding}
         ,{'-':extension_upgrade_path}
         ,{'-':basic_internal_update}
 

@@ -36,6 +36,9 @@
 // includes to support BSON<->numeric
 #include <utils/numeric.h>
 
+// includes to support UTF-8 -> server encoding conversion:
+#include <mb/pg_wchar.h>
+
 // includes to support BSON binary send/receive:
 #include <lib/stringinfo.h>  // technically, #included by pgformat but OK
 #include <libpq/pqformat.h>
@@ -81,6 +84,24 @@ static text* mk_text(const char* cstr)
     SET_VARSIZE(t, tot_len);
 
     memcpy((void *) VARDATA(t), (void *) cstr, s_len);
+
+    return t;
+}
+
+
+// BSON strings are UTF-8, but postgres text must be in the server encoding.
+// pg_any_to_server() converts when the database is not UTF-8 (ERROR if a
+// character has no equivalent there) and, when it is, verifies the bytes so
+// invalid UTF-8 from rows stored before write-side validation cannot become
+// invalid text.  ASCII is untouched, so this is free for the common case.
+static text* mk_text_from_utf8(const char* utf8)
+{
+    char* conv = pg_any_to_server(utf8, strlen(utf8), PG_UTF8);
+    text* t = mk_text(conv);
+
+    if(conv != utf8) {
+	pfree(conv);
+    }
 
     return t;
 }
@@ -464,7 +485,7 @@ Datum bson_get_string(PG_FUNCTION_ARGS)
 	// len is deliberately unused.  BSON strings may legally carry an
 	// embedded NUL but postgres text may not, so mk_text's strlen()
 	// truncating at the first NUL is the intended behavior.
-	txt = mk_text( bson_iter_utf8(&target, &len) );
+	txt = mk_text_from_utf8( bson_iter_utf8(&target, &len) );
     }
 
     PG_FREE_IF_COPY(aa,0);
@@ -1099,7 +1120,7 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
     }
 
     if(txt != 0) {
-	text* t = mk_text(txt);
+	text* t = mk_text_from_utf8(txt);
 	if(must_free) {
 	    bson_free((void*)txt);
 	}
