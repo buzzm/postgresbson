@@ -425,6 +425,11 @@ def extension_upgrade_path():
         return fetchRow1Col(
             "SELECT extversion FROM pg_extension WHERE extname='pgbson'")
 
+    def op_lang():
+        return fetchRow1Col(
+            """SELECT l.lanname FROM pg_proc p JOIN pg_language l ON l.oid = p.prolang
+               WHERE p.proname = 'bson_equal'""")
+
     def has_get_value():
         return 0 != fetchRow1Col(
             "SELECT count(*) FROM pg_proc WHERE proname='bson_get_value'")
@@ -454,12 +459,26 @@ def extension_upgrade_path():
         if item != '{ "_" : "scalar!" }':
             return "upgraded bson_get_value returned %s" % item
 
-        #  A fresh install must land on 2.1 by itself, i.e. pgbson.control's
+        #  2.1 still has the LANGUAGE SQL operator wrappers; 2.2 rebinds them
+        #  to C (see operators_ignore_search_path).
+        if op_lang() != 'sql':
+            return "bson_equal should be LANGUAGE sql in 2.1; got %s" % op_lang()
+        one("alter extension pgbson update to '2.2'")
+        if version() != '2.2':
+            return "ALTER EXTENSION UPDATE did not land on 2.2; got %s" % version()
+        if op_lang() != 'c':
+            return "bson_equal is %s after upgrade to 2.2, expected c" % op_lang()
+        if fetchRow1Col("""SELECT '{"a":1}'::bson = '{"a":1}'::bson""") is not True:
+            return "= broken after upgrade to 2.2"
+
+        #  A fresh install must land on 2.2 by itself, i.e. pgbson.control's
         #  default_version is the "main switch" and it got bumped.
         one("drop extension pgbson CASCADE")
         one("create extension pgbson")
-        if version() != '2.1':
-            return "default_version is not 2.1; fresh install gave %s" % version()
+        if version() != '2.2':
+            return "default_version is not 2.2; fresh install gave %s" % version()
+        if op_lang() != 'c':
+            return "fresh 2.2 install has bson_equal as %s, expected c" % op_lang()
 
     finally:
         #  Put back what we tore down, whatever happened above.
@@ -1062,6 +1081,40 @@ def text_in_server_encoding():
     return msg
 
 
+#  The comparison operators used to be LANGUAGE SQL wrappers that called
+#  pgbson_compare() by bare name, resolved through the caller's search_path.
+#  A function of that name in an earlier schema was run instead, silently
+#  changing the answer (or running attacker code with the caller's rights).
+#  They are C functions now, so there is nothing to resolve.
+def operators_ignore_search_path():
+    msg = None
+    try:
+        curs.execute("CREATE SCHEMA evil")
+        for fn in ["pgbson_compare", "bson_binary_equal"]:
+            ret = "int" if fn == "pgbson_compare" else "boolean"
+            val = "1" if fn == "pgbson_compare" else "false"
+            curs.execute("CREATE FUNCTION evil.%s(bson, bson) RETURNS %s "
+                         "LANGUAGE sql AS 'select %s'" % (fn, ret, val))
+        curs.execute("SET LOCAL search_path = evil, public")
+
+        one = '{"a":1}'
+        two = '{"a":2}'
+        checks = [("=",    one, one, True), ("<>", one, one, False),
+                  ("<",    one, two, True), ("<=", one, two, True),
+                  (">",    one, two, False), (">=", one, two, False),
+                  ("==",   one, one, True), ("<<>>", one, one, False)]
+        for op, a, b, want in checks:
+            curs.execute("SELECT %%s::bson %s %%s::bson" % op, (a, b))
+            got = curs.fetchone()[0]
+            if got is not want:
+                msg = "%s %s %s gave %r under a hostile search_path, expected %r" % (a, op, b, got, want)
+                break
+    finally:
+        conn.rollback()  # discards schema, functions and SET LOCAL
+
+    return msg
+
+
 #  bson_hash moved from signed int (overflow is undefined behavior) to
 #  uint32.  The bits must be exactly the old wrapping DJB2, or existing hash
 #  indexes would silently stop finding rows.
@@ -1183,6 +1236,7 @@ use case; bson "on its own" in and out of postgres is not very interesting.
         ,{'-':datetime_edges}
         ,{'-':embedded_nul_truncates}
         ,{'-':hash_bits_unchanged}
+        ,{'-':operators_ignore_search_path}
         ,{'-':datetime_as_text_format}
         ,{'-':jsonb_array_bad_utf8_no_crash}
         ,{'-':reject_invalid_utf8}

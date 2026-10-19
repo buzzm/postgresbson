@@ -11,9 +11,9 @@
    "provides": {
       "bson": {
          "abstract": "The bson data type",
-          "file": "pgbson--2.1.sql",
+          "file": "pgbson--2.2.sql",
          "docfile": "README.md",
-         "version": "2.1.0"
+         "version": "2.2.0"
       }
    },
    "resources": {

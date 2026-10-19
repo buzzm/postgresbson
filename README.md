@@ -331,6 +331,31 @@ Working and mature.  All contribs / PRs / comments / issues welcome.
 Release notes
 =============
 
+2.2.0
+-----
+
+**The extension version is now 2.2.**  A fresh `CREATE EXTENSION pgbson` picks
+it up automatically.  If you already have 2.1 installed, `make install` and
+then:
+
+    ALTER EXTENSION pgbson UPDATE TO '2.2';
+
+Install the new shared library *first*: the 2.2 SQL refers to C functions that
+earlier builds do not have.  `CREATE EXTENSION pgbson VERSION '2.1'` (or
+`'2.0'`) still works if you want the older function set.
+
+**Security: the comparison operators no longer depend on `search_path`.**  `=`,
+`<>`, `<`, `<=`, `>`, `>=` and `<<>>` were bound to `LANGUAGE SQL` wrappers that
+called `pgbson_compare()` / `bson_binary_equal()` by bare name.  An SQL function
+body is resolved through the *caller's* `search_path` each time it runs, so a
+function of that name created in a schema earlier on the search path was run
+instead -- changing the answer, or running with the caller's privileges if the
+caller was a superuser.  They are now C functions with nothing to resolve.  As a
+side effect they are `IMMUTABLE STRICT PARALLEL SAFE` like everything else here;
+as SQL functions they defaulted to `VOLATILE`.  Operators, operator classes and
+indexes are unchanged and need no rebuild.
+
+
 2.1.2
 -----
 
