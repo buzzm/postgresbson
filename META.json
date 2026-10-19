@@ -18,7 +18,7 @@
    },
    "resources": {
       "bugtracker": {
-         "web": "https://github.com/buzzm/postgresbson-pair/issues/"
+         "web": "https://github.com/buzzm/postgresbson/issues/"
       },
       "repository": {
       "url":  "git://github.com/buzzm/postgresbson.git",
