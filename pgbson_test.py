@@ -833,16 +833,16 @@ def basic_internal_update():
     if rb1 != rb2:
         msg = "fetch of bdata2 and bdata yields non-equal BSON"
 
-    rb4 = rb1
-    if True:
-        # Mess with rb2 -- BUT in a way that does not corrupt BSON itself.
-        # So go to end and back up 2 bytes to leave the trailing NULL intact:
-        idx = len(rb2) - 2    
-        rb3 = bytearray(rb2)
-        rb3[idx] = 217  # arbitrary
-        idx -= 1
-        rb3[idx] = 119  # arbitrary
-        rb4 = bytes(rb3)
+    # Mess with rb2 -- BUT in a way that does not corrupt BSON itself:
+    # change one character inside a string value, keeping its length.
+    # (This used to overwrite the 2 bytes before the trailing NUL, but those
+    # are the end-of-document markers of "payments" and "data", which must
+    # be 0.  libbson 1.23 did not check them; 1.30 does, and rightly
+    # rejected the result as invalid BSON.)
+    rb2 = bytes(rb2)  # psycopg2 hands back bytea as a memoryview
+    if rb2.count(b"Bugatti") != 1:
+        return "test data changed: expected exactly one 'Bugatti' in sdata"
+    rb4 = rb2.replace(b"Bugatti", b"Bugatto")
 
     curs.execute("UPDATE bsontest set bdata2 = %s", (rb4,))
 
