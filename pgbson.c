@@ -736,10 +736,21 @@ Datum bson_get_jsonb_array(PG_FUNCTION_ARGS)
 	size_t blen;
 	// This is what makes it all possible:
 	char* jsons = bson_array_as_json(&b2, &blen);
+	Jsonb *jsonb;
+
+	// bson_array_as_json() returns NULL when it cannot render the value,
+	// e.g. a string that is not valid UTF-8.  jsonb_in(NULL) would
+	// dereference it and take the whole backend down.
+	if(jsons == NULL) {
+	    PG_FREE_IF_COPY(aa,0);
+	    ereport(
+		ERROR,
+		(errcode(ERRCODE_INVALID_BINARY_REPRESENTATION), errmsg("cannot convert BSON array to JSON"))
+		);
+	}
 
 	// Well ...  HELLO there!
-	Jsonb *jsonb =
-	    DatumGetJsonbP(DirectFunctionCall1(jsonb_in, CStringGetDatum(jsons)));
+	jsonb = DatumGetJsonbP(DirectFunctionCall1(jsonb_in, CStringGetDatum(jsons)));
 	bson_free(jsons); // per bson.h
 	
 	PG_FREE_IF_COPY(aa,0);
