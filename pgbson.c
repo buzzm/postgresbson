@@ -50,6 +50,15 @@
 // Others:  
 #include "bson.h"  // obviously...
 
+// libbson 2.x removed bson_array_as_json(); the identical (legacy extended
+// JSON) renderer lives on as bson_array_as_legacy_extended_json(), which
+// 1.30+ also has.  Older 1.x only knows the old name.
+#if BSON_CHECK_VERSION(1, 30, 0)
+#define pgbson_array_as_json bson_array_as_legacy_extended_json
+#else
+#define pgbson_array_as_json bson_array_as_json
+#endif
+
 
 
 
@@ -810,7 +819,7 @@ Datum bson_get_jsonb_array(PG_FUNCTION_ARGS)
     if(rc) {
 	size_t blen;
 	// This is what makes it all possible:
-	char* jsons = bson_array_as_json(&b2, &blen);
+	char* jsons = pgbson_array_as_json(&b2, &blen);
 	Jsonb *jsonb;
 
 	// bson_array_as_json() returns NULL when it cannot render the value,
