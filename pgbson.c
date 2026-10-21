@@ -40,7 +40,7 @@
 
 
 // Others:  
-#include "bson.h"  // obviously...
+#include <bson/bson.h>  // obviously...  (this form works for libbson 1.x and 2.x)
 
 // libbson 2.x removed bson_array_as_json(); the identical (legacy extended
 // JSON) renderer lives on as bson_array_as_legacy_extended_json(), which

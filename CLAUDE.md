@@ -28,10 +28,21 @@ cleaned up unless asked. `MyMake.mk` is a local variant of `Makefile` with Homeb
 
 ## Build, install, test
 
-The only external dependency is libbson (`brew install mongo-c-driver`, or `libbson-devel` on RH).
-**Before the first build you must edit `BSON_INCLUDES` and `BSON_SHLIB` at the top of `Makefile`** to
-point at the local libbson headers and shared lib; the committed values (`$(HOME)/projects/bson/...`)
-work on nobody else's machine. Everything below that line is stock PGXS.
+The only external dependency is libbson (`libbson-devel` on Fedora/RHEL, `brew install
+mongo-c-driver@1` on OS X). 1.x and 2.x both work. The `Makefile` finds it with `pkg-config`,
+preferring `bson2` (2.x) over `libbson-1.0`, and prints the version and flags it picked as the
+first line of the build; check that line when a build behaves oddly. Two ways to steer it:
+
+- `PKG_CONFIG_PATH=/opt/homebrew/opt/mongo-c-driver@1/lib/pkgconfig make` — needed for brew's
+  keg-only `mongo-c-driver@1`, which `pkg-config` does not see by default (it finds 1.23.2).
+- Set **both** `BSON_INCLUDES` and `BSON_SHLIB` (command line or environment) and `pkg-config` is
+  not run at all. Setting only one is an error. The include dir is the one *above* `bson/`,
+  because `pgbson.c` does `#include <bson/bson.h>` (the form that works for 1.x and 2.x).
+
+The include flags go in `PG_CPPFLAGS`, not `PG_CFLAGS`: PGXS passes only `CPPFLAGS` to clang for
+the LLVM bitcode (`.bc`) step, so on a postgres built `--with-llvm` they would otherwise be
+missing there. Homebrew's postgres is built without LLVM, so to exercise that step locally use
+`make with_llvm=yes CLANG=clang`. Everything below the libbson section is stock PGXS.
 
 ```bash
 make PGUSER=postgres              # -> pgbson.o, pgbson.so (or .dylib on OS X)
@@ -56,9 +67,9 @@ disk, so **SQL-level** changes — a new `CREATE FUNCTION`, a changed operator b
 do take effect from the drop/create alone. Only the C half is tied to process lifetime.
 
 Verify the installed shlib can actually find libbson at runtime — `ldd`/`otool -L` on the installed
-`pgbson.so` must resolve `libbson-1.0.so.0`. A build that links fine but can't resolve at runtime is
-the most common failure mode. On RHEL 9 the PGXS `.bc` LLVM target may fail for lack of `clang`; the
-`.bc` is not needed for the extension to work.
+`pgbson.so` must resolve `libbson-1.0.so.0` (`libbson2.so.2` for 2.x). A build that links fine but can't resolve at runtime is
+the most common failure mode. If the PGXS `.bc` LLVM target fails for lack of `clang` (seen on RHEL 9), build with
+`make with_llvm=no`; the `.bc` is not needed for the extension to work.
 
 ```bash
 python3 pgbson_test.py            # runs the full suite

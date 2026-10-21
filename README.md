@@ -705,9 +705,10 @@ Requires:
  *  `pg_config` (which comes with postgres) and is used as part of the Makefile.
     Note that some earlier versions of postgres did not not include the
     `pg_config` exec and the `pgxs` environment.
- *  `libbson.so` and BSON C SDK `.h` files.  You can make or install these
-    separately and there is plenty of material on this topic.  There are some
-    quick tips at the top of the `Makefile`
+ *  libbson 1.x or 2.x, with its `.h` files: `libbson-devel` on Fedora/RHEL
+    (EPEL on RHEL), `brew install mongo-c-driver@1` on OS X.  The `Makefile`
+    finds it with `pkg-config` and prints which one it picked; the top of the
+    `Makefile` shows how to point it elsewhere.
  *  C compiler.  No C++ used.  The compiler arguments are driven by the
     environment set up by `pg_config`.
 
@@ -716,7 +717,6 @@ Requires:
 Then:
 ```
     git clone https://github.com/buzzm/postgresbson.git
-    # edit the Makefile to point at the BSON includes and dynamic lib; then:
     make PGUSER=postgres  # compiles pgbson.c to pgbson.so
     make PGUSER=postgres install  # copies .so, .sql, and .control files into target dirs in postgres environment
 ```
@@ -729,15 +729,13 @@ on OS X using `brew` you won't need root because root does not own `/opt/homebre
 but on Linux, lots of things are done with `sudo yum` and resources end up
 owned as root in `/usr/pgsql-nn` and `/usr/lib64`.
 
-In addition, on RHEL 9, there appears to be an oddment around the compilation
-target in make trying to create a `.bc` LLVM file using `clang` in addition to
-the regular `.so` shlib using `gcc`.  On many platforms, `clang` may not be
-installed and even if it is, the `pg_config` modified `Makefile` may use the
-wrong path to it e.g. `/usr/lib64/ccache/clang` instead of `/usr/bin/clang` or
-just `clang`.  The good news it appears the `.bc` LLVM output is *not* necessary
-for the postgres extension.  As long as the `.so` is installed into the proper
-path the extension will work.  At your discretion you can "manually make" the
-`.bc` file by editing the command line and then running `make PGUSER=postgres install` again.
+In addition, if postgres was built with LLVM (as on RHEL), make also tries to
+create a `.bc` LLVM file using `clang` in addition to the regular `.so` shlib
+using `gcc`.  On many platforms, `clang` may not be installed and even if it is,
+the `pg_config` modified `Makefile` may use the wrong path to it e.g.
+`/usr/lib64/ccache/clang` instead of `/usr/bin/clang` or just `clang`.  The `.bc`
+LLVM output is *not* necessary for the extension; skip it with
+`make PGUSER=postgres with_llvm=no` (and the same for `install`).
 
 
 
