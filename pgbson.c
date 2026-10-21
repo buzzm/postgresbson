@@ -1083,7 +1083,7 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 	    }
 	    case BSON_TYPE_INT64: {
 		int64_t v = bson_iter_int64(&target);
-		sprintf(valbuf, "%lld", v);
+		sprintf(valbuf, INT64_FORMAT, v);
 		txt = valbuf;
 		break;		
 	    }
@@ -1125,7 +1125,7 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 	    case BSON_TYPE_ARRAY: {		
 		uint32_t subdoc_len;
 		const uint8_t* subdoc_data;
-		bson_t b; // on stack
+		bson_t sub; // on stack
 		size_t blen;
 
 		if(ft == BSON_TYPE_DOCUMENT) {
@@ -1134,9 +1134,9 @@ Datum bson_as_text(PG_FUNCTION_ARGS)
 		    bson_iter_array(&target, &subdoc_len, &subdoc_data);
 		}
 
-		bson_init_static(&b, subdoc_data, subdoc_len);
+		bson_init_static(&sub, subdoc_data, subdoc_len);
 
-		txt = bson_as_relaxed_extended_json(&b, &blen);
+		txt = bson_as_relaxed_extended_json(&sub, &blen);
 		must_free = true;
 		break;
 	    }
