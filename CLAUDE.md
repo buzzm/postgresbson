@@ -18,6 +18,7 @@ A PostgreSQL extension (`pgbson`) implementing a `bson` data type backed by the 
 | `Makefile` | PGXS build; top half is hand-edited local paths |
 | `pgbson_test.py` | The whole test suite (python + `psycopg2` + `bson`) |
 | `META.json` | PGXN distribution metadata |
+| `mkpgxn.sh` | Builds the PGXN zip from a release tag (see "Releasing to PGXN") |
 | `t1.sql`, `README.md`, `LICENSE` | |
 
 The working directory contains many **untracked** scratch files (`perf*.py`, `ff*.py`, `pt*.py`,
@@ -225,3 +226,28 @@ both `Makefile` and `MyMake.mk`, and update `META.json`'s `provides.bson.file` *
 `provides.bson.version` per the correspondence above.
 Old install scripts stay shipped rather than deleted, so `CREATE EXTENSION pgbson VERSION '2.0'`
 keeps working and `extension_upgrade_path()` in the test suite has something real to upgrade from.
+
+## Releasing to PGXN
+
+A release is a tag, and the zip is built from the tag, never from the working directory. Most
+pushes are not releases. To release X.Y.Z:
+
+1. Set `META.json`'s top-level `"version"` to X.Y.Z and commit.
+2. `git tag -a vX.Y.Z -m "PGXN X.Y.Z"`
+3. `./mkpgxn.sh vX.Y.Z` — `git archive`s the tag into `bson-X.Y.Z.zip` (flat, explicit file list).
+4. `git push origin main vX.Y.Z` — a plain `git push` does not send tags.
+5. The user uploads the zip to PGXN by hand.
+
+`mkpgxn.sh` refuses unless, at the tag, the tag name is `v` + `META.json` `"version"`,
+`provides.bson.version` is `default_version` + `.0`, and `provides.bson.file` is
+`pgbson--<default_version>.sql`. It also refuses to overwrite an existing zip: the
+`bson-*.zip` files in the working directory are the uploaded originals.
+
+A tag may be moved (`git tag -f`) until it is pushed. **Never move a pushed tag** — the PGDG RPM
+packaging builds from tags. Fix forward with X.Y.Z+1.
+
+Past releases map to these commits (verified by rebuilding each and diffing against the uploaded
+zip): 2.0.2 `6730a5f`, 2.0.4 `ec71d31`, 2.1.0 `2eb7d20`, 2.1.1 `4547210`, 2.1.2 `a65d522`,
+2.2.0 `30d1c66`. 2.1.1's commit is not on `main`: rebase-merging Devrim's PRs replaced it with
+`01bc6e3`, which also contains his changes. The `v2.1.1` tag is what keeps `4547210` alive.
+2.0.x predates the `provides` rule, so `mkpgxn.sh` refuses those tags; they never need rebuilding.
